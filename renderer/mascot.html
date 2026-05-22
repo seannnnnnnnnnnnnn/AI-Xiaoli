@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI小力</title>
+    <link rel="stylesheet" href="./mascot.css" />
+  </head>
+  <body>
+    <main class="mascot-shell" id="mascotShell" aria-label="AI小力">
+      <div class="drag-zone" aria-hidden="true"></div>
+      <section class="bubble" id="bubble" hidden>
+        <div class="alert-mark" aria-hidden="true"><span>!</span></div>
+        <div class="alert-copy">
+          <small id="bubbleSource"></small>
+          <strong id="bubbleTitle"></strong>
+          <span id="bubbleBody"></span>
+        </div>
+        <div class="bubble-actions">
+          <button id="bubbleSnoozeBtn" type="button">10分钟后</button>
+          <button id="bubbleAckBtn" type="button">我知道了</button>
+        </div>
+      </section>
+
+      <section class="stage" id="stage">
+        <div class="alert-fog" aria-hidden="true"></div>
+        <div class="aura"></div>
+        <div class="quick-actions">
+          <button id="openSettingsBtn" type="button" title="提醒设置" aria-label="提醒设置">＋</button>
+          <button id="justNowBtn" type="button" title="刚刚发生了啥" aria-label="刚刚发生了啥">录</button>
+          <button id="pauseBtn" type="button" title="暂停提醒" aria-label="暂停提醒">Ⅱ</button>
+        </div>
+        <div class="mascot-layers" id="mascotLayers">
+          <div class="layer body-layer"><img class="mascot-img" alt="" /></div>
+          <div class="layer cape-layer"><img class="mascot-img" alt="" /></div>
+          <div class="layer head-layer"><img class="mascot-img" alt="AI小力" /></div>
+          <div class="visor-glow"></div>
+          <div class="stars" id="stars"></div>
+        </div>
+        <button class="mascot-hit-area" id="mascotHitArea" type="button" aria-label="唤醒小力聆听"></button>
+        <div class="floor-shadow"></div>
+      </section>
+    </main>
+    <script src="./mascot.js"></script>
+  </body>
+</html>

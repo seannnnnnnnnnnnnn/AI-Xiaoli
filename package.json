@@ -1,0 +1,19 @@
+{
+  "name": "ai-xiaoli",
+  "version": "0.1.0",
+  "description": "AI小力，桌面 AI 任务助手。",
+  "main": "main.js",
+  "type": "commonjs",
+  "license": "MIT",
+  "scripts": {
+    "dev": "electron .",
+    "package:mac": "node scripts/package-mac.js"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "devDependencies": {
+    "@electron/packager": "^19.0.1",
+    "electron": "^39.0.0"
+  }
+}

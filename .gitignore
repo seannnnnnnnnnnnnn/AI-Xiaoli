@@ -1,0 +1,17 @@
+node_modules/
+dist/
+native/
+*.log
+npm-debug.log*
+.DS_Store
+.env
+.env.*
+!.env.example
+userData/
+activity.jsonl
+settings.json
+reminders.json
+summary-history.json
+summary-templates.json
+just-now-history.json
+ai-key.json

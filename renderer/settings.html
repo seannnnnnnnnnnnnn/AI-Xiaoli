@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI小力</title>
+    <link rel="stylesheet" href="./settings.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <img class="brand-mark" src="../assets/app-logo.png" alt="AI小力" />
+          <div>
+            <h1>AI小力</h1>
+            <p>桌面 AI 任务助手</p>
+          </div>
+        </div>
+
+        <label class="search-field">
+          <span>搜索</span>
+          <input id="searchInput" type="search" placeholder="标题、内容、来源" />
+        </label>
+
+        <nav class="smart-list" aria-label="提醒筛选">
+          <button class="nav-item active" data-filter="today" type="button">
+            <span class="nav-icon today"></span>
+            <span>今天</span>
+            <strong id="todayCount">0</strong>
+          </button>
+          <button class="nav-item" data-filter="scheduled" type="button">
+            <span class="nav-icon scheduled"></span>
+            <span>计划中</span>
+            <strong id="scheduledCount">0</strong>
+          </button>
+          <button class="nav-item" data-filter="all" type="button">
+            <span class="nav-icon all"></span>
+            <span>全部</span>
+            <strong id="allCount">0</strong>
+          </button>
+          <button class="nav-item" data-filter="disabled" type="button">
+            <span class="nav-icon disabled"></span>
+            <span>已停用</span>
+            <strong id="disabledCount">0</strong>
+          </button>
+        </nav>
+
+        <section class="source-block">
+          <div class="section-title">来源标签</div>
+          <div id="sourceList" class="source-list"></div>
+        </section>
+
+        <section class="xiaoli-block">
+          <div class="xiaoli-head">
+            <span class="xiaoli-dot"></span>
+            <div>
+              <strong>AI小力</strong>
+              <small>提醒会同时触发气泡、动效和系统通知。</small>
+            </div>
+          </div>
+          <button id="focusMascotSettingsBtn" class="sidebar-action" type="button">AI小力设置</button>
+          <button id="focusAiBtn" class="sidebar-action" type="button">AI 总结</button>
+          <button id="focusJustNowBtn" class="sidebar-action" type="button">刚刚发生了啥</button>
+          <button id="testAnimationBtn" class="sidebar-action primary-soft" type="button">测试提醒动效</button>
+        </section>
+      </aside>
+
+      <main class="reminders-pane">
+        <header class="content-toolbar">
+          <div>
+            <p id="listEyebrow" class="eyebrow">智能列表</p>
+            <h2 id="listTitle">今天</h2>
+          </div>
+          <button id="newReminderBtn" class="primary-button" type="button">新建提醒</button>
+        </header>
+
+        <div class="summary-strip">
+          <div>
+            <span>下一条</span>
+            <strong id="nextReminderPreview">暂无待提醒</strong>
+          </div>
+          <div>
+            <span>提醒状态</span>
+            <strong id="pauseStatusText">运行中</strong>
+          </div>
+        </div>
+
+        <section class="list-card">
+          <div class="list-card-head">
+            <div>
+              <strong id="reminderCount">0</strong>
+              <span id="listSubtitle">条提醒</span>
+            </div>
+            <span id="filterHint" class="filter-hint">按时间排序</span>
+          </div>
+          <div id="reminderList" class="reminder-list"></div>
+        </section>
+      </main>
+
+      <aside class="inspector">
+        <section id="reminderEditor" class="inspector-section active">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">提醒详情</p>
+              <h2 id="formTitle">添加提醒</h2>
+            </div>
+            <button class="ghost-button" id="resetFormBtn" type="button" hidden>取消</button>
+          </div>
+
+          <form id="reminderForm" class="detail-form">
+            <label>
+              标题
+              <input id="titleInput" type="text" maxlength="80" required placeholder="例：检查视频任务" />
+            </label>
+            <label>
+              备注
+              <textarea id="bodyInput" rows="5" maxlength="400" placeholder="写下具体要做什么，小力提醒时会显示。"></textarea>
+            </label>
+            <div class="field-grid">
+              <label>
+                日期和时间
+                <input id="dueInput" type="datetime-local" required />
+              </label>
+              <label>
+                重复
+                <select id="repeatInput">
+                  <option value="none">不重复</option>
+                  <option value="daily">每天</option>
+                  <option value="weekly">每周</option>
+                  <option value="monthly">每月</option>
+                </select>
+              </label>
+            </div>
+            <label>
+              来源标签
+              <input id="sourceInput" type="text" maxlength="40" placeholder="例：微信、邮箱、项目" />
+            </label>
+            <button id="saveReminderBtn" class="primary-button wide" type="submit">保存提醒</button>
+          </form>
+        </section>
+
+        <section id="mascotSettingsPanel" class="inspector-section">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">桌面 AI 任务助手</p>
+              <h2>AI小力设置</h2>
+            </div>
+          </div>
+          <label class="switch-row">
+            <span>
+              <strong>暂停提醒</strong>
+              <small>暂停后小力进入休息状态，不触发到期提醒。</small>
+            </span>
+            <input id="pausedInput" type="checkbox" />
+          </label>
+          <label class="switch-row">
+            <span>
+              <strong>显示小力</strong>
+              <small>隐藏后仍保留菜单栏入口和提醒检查。</small>
+            </span>
+            <input id="visibleInput" type="checkbox" />
+          </label>
+          <label class="switch-row">
+            <span>
+              <strong>顶部通知栏常驻</strong>
+              <small>开启后桌宠顶部会一直显示状态栏。</small>
+            </span>
+            <input id="pinnedBarInput" type="checkbox" />
+          </label>
+          <label class="size-row">
+            <span>
+              <strong>小力大小</strong>
+              <small>调节桌面小力形象和透明窗口尺寸。</small>
+            </span>
+            <output id="mascotScaleValue">100%</output>
+            <input id="mascotScaleInput" type="range" min="70" max="145" step="5" />
+          </label>
+          <label class="switch-row">
+            <span>
+              <strong>开机启动</strong>
+              <small>由 macOS 登录项控制，可随时关闭。</small>
+            </span>
+            <input id="autoLaunchInput" type="checkbox" />
+          </label>
+
+          <div class="settings-divider"></div>
+
+          <div class="panel-head compact-head">
+            <div>
+              <p class="eyebrow">通用 LLM API</p>
+              <h2>API 配置</h2>
+            </div>
+            <span id="aiStatus" class="ai-status">未配置</span>
+          </div>
+
+          <form id="aiConfigForm" class="ai-config-form">
+            <label>
+              Base URL
+              <input id="aiBaseUrlInput" type="url" placeholder="https://api.openai.com" />
+            </label>
+            <div class="field-grid">
+              <label>
+                模型
+                <input id="aiModelInput" type="text" placeholder="gpt-4o-mini / deepseek-chat / qwen-plus" />
+              </label>
+              <label>
+                Chat Path
+                <input id="aiChatPathInput" type="text" placeholder="/v1/chat/completions" />
+              </label>
+            </div>
+            <label>
+              API Key
+              <input id="aiApiKeyInput" type="password" autocomplete="off" placeholder="留空则保留已保存 Key" />
+            </label>
+            <label class="switch-row compact">
+              <span>
+                <strong>启用 LLM 总结</strong>
+                <small>兼容 OpenAI Chat Completions 协议，点击生成总结时才调用模型。</small>
+              </span>
+              <input id="aiEnabledInput" type="checkbox" />
+            </label>
+            <label class="switch-row compact">
+              <span>
+                <strong>记录前台 App</strong>
+                <small>需要 macOS 辅助功能权限。</small>
+              </span>
+              <input id="activityTrackingInput" type="checkbox" />
+            </label>
+            <div class="button-row">
+              <button id="saveAiConfigBtn" class="primary-button" type="submit">保存 API 配置</button>
+              <button id="testAiBtn" class="ghost-button" type="button">测试连接</button>
+            </div>
+          </form>
+        </section>
+
+        <section id="aiPanel" class="inspector-section">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">小力 AI</p>
+              <h2>智能复盘</h2>
+            </div>
+          </div>
+
+          <div class="summary-tools">
+            <div class="summary-template-row">
+              <label>
+                复盘模板
+                <select id="summaryTemplateSelect"></select>
+              </label>
+              <button id="editSummaryTemplateBtn" class="ghost-button" type="button">编辑</button>
+            </div>
+            <form id="summaryTemplateForm" class="summary-template-form" hidden>
+              <label>
+                模板名称
+                <input id="summaryTemplateNameInput" type="text" maxlength="80" placeholder="例：项目复盘模板" />
+              </label>
+              <label>
+                模板 Markdown
+                <textarea id="summaryTemplateBodyInput" rows="8" maxlength="8000" placeholder="写入每次复盘前置要求，例如角色、关注维度、输出结构。"></textarea>
+              </label>
+              <div class="button-row">
+                <button id="saveSummaryTemplateBtn" class="primary-button" type="submit">保存模板</button>
+                <button id="deleteSummaryTemplateBtn" class="ghost-button danger-text" type="button">删除模板</button>
+              </div>
+            </form>
+            <div class="range-segment" aria-label="选择总结周期">
+              <button class="active" data-summary-choice="today" type="button">今天</button>
+              <button data-summary-choice="yesterday" type="button">昨天</button>
+              <button data-summary-choice="7d" type="button">七天</button>
+              <button data-summary-choice="custom" type="button">自选</button>
+            </div>
+            <div id="customRangeFields" class="field-grid custom-range" hidden>
+              <label>
+                起始日
+                <input id="summaryStartInput" type="date" />
+              </label>
+              <label>
+                结束日
+                <input id="summaryEndInput" type="date" />
+              </label>
+            </div>
+            <textarea id="aiPromptInput" rows="3" maxlength="400" placeholder="可选：补充你想让小力重点关注什么。"></textarea>
+            <div class="button-row">
+              <button id="generateSummaryBtn" class="primary-button" type="button">生成智能复盘</button>
+            </div>
+            <div class="summary-history-row">
+              <label>
+                历史复盘
+                <select id="summaryHistorySelect"></select>
+              </label>
+              <button id="openSummaryHistoryBtn" class="ghost-button" type="button">打开</button>
+            </div>
+          </div>
+          <div id="aiSummaryOutput" class="summary-output rich-summary">还没有生成总结。</div>
+        </section>
+
+        <section id="justNowPanel" class="inspector-section">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">即时记录</p>
+              <h2>刚刚发生了啥</h2>
+            </div>
+          </div>
+
+          <div class="summary-tools">
+            <textarea id="justNowTranscriptInput" rows="5" maxlength="12000" placeholder="停止录音后会先保存转写草稿；你可以在这里确认、删改或补充后再生成复盘。"></textarea>
+            <div class="button-row">
+              <button id="summarizeJustNowTextBtn" class="primary-button" type="button">生成复盘</button>
+            </div>
+            <details class="template-details">
+              <summary>整理模板</summary>
+              <textarea id="justNowTemplateInput" rows="8" maxlength="8000"></textarea>
+              <div class="button-row">
+                <button id="saveJustNowTemplateBtn" class="primary-button" type="button">保存模板</button>
+              </div>
+            </details>
+            <div class="summary-history-row">
+              <label>
+                历史记录
+                <select id="justNowHistorySelect"></select>
+              </label>
+              <button id="openJustNowHistoryBtn" class="ghost-button" type="button">打开</button>
+            </div>
+          </div>
+          <div id="justNowOutput" class="summary-output rich-summary">还没有生成记录。</div>
+        </section>
+      </aside>
+
+      <div id="toast" class="toast" hidden></div>
+    </div>
+    <script src="./settings.js"></script>
+  </body>
+</html>

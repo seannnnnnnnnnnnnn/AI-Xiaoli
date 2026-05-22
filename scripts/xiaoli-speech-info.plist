@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>ai.xiaoli.mascot.speech</string>
+  <key>CFBundleName</key>
+  <string>AI小力</string>
+  <key>CFBundleDisplayName</key>
+  <string>AI小力</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>AI小力需要使用麦克风记录你主动开启的“刚刚发生了啥”，用于本机转写和总结。</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>AI小力需要使用 macOS 语音识别把你主动记录的内容转成文字。</string>
+</dict>
+</plist>
