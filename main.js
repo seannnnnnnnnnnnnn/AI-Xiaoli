@@ -97,6 +97,10 @@ let reminders = [];
 app.setName(APP_NAME);
 app.setAppUserModelId("ai.xiaoli.mascot");
 
+if (process.env.XIAOLI_USER_DATA_DIR) {
+  app.setPath("userData", path.resolve(process.env.XIAOLI_USER_DATA_DIR));
+}
+
 function migrateLegacyUserData() {
   const currentDir = app.getPath("userData");
   const legacyDir = path.join(app.getPath("appData"), LEGACY_APP_NAME);

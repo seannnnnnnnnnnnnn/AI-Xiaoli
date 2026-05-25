@@ -3,6 +3,7 @@ import Foundation
 import Speech
 
 final class SpeechSession {
+  private let maxRecognitionChunkDuration = 50.0
   private let recognizer: SFSpeechRecognizer
   private let recordingURL: URL
   private let debugDirectory: URL?
@@ -69,6 +70,53 @@ final class SpeechSession {
     return attributes?[.size] as? Int64 ?? 0
   }
 
+  private func audioDurationSeconds(_ url: URL) -> Double {
+    guard let file = try? AVAudioFile(forReading: url), file.processingFormat.sampleRate > 0 else {
+      return 0
+    }
+    return Double(file.length) / file.processingFormat.sampleRate
+  }
+
+  private func chunkAudioFile(_ sourceURL: URL) throws -> [URL] {
+    let file = try AVAudioFile(forReading: sourceURL)
+    let sampleRate = file.processingFormat.sampleRate
+    guard sampleRate > 0 else { return [sourceURL] }
+    let framesPerChunk = AVAudioFramePosition(maxRecognitionChunkDuration * sampleRate)
+    guard file.length > framesPerChunk else { return [sourceURL] }
+
+    let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+    var chunks: [URL] = []
+    var startFrame: AVAudioFramePosition = 0
+    var index = 1
+    while startFrame < file.length {
+      file.framePosition = startFrame
+      let remainingFrames = file.length - startFrame
+      let frameCount = min(framesPerChunk, remainingFrames)
+      guard let buffer = AVAudioPCMBuffer(
+        pcmFormat: file.processingFormat,
+        frameCapacity: AVAudioFrameCount(frameCount)
+      ) else {
+        break
+      }
+      try file.read(into: buffer, frameCount: AVAudioFrameCount(frameCount))
+      let chunkURL = directory.appendingPathComponent("\(recordingBaseName)-chunk-\(index).wav")
+      try? FileManager.default.removeItem(at: chunkURL)
+      let output = try AVAudioFile(forWriting: chunkURL, settings: file.fileFormat.settings)
+      try output.write(from: buffer)
+      chunks.append(chunkURL)
+      startFrame += AVAudioFramePosition(buffer.frameLength)
+      index += 1
+      if buffer.frameLength == 0 { break }
+    }
+    return chunks.isEmpty ? [sourceURL] : chunks
+  }
+
+  private func removeTemporaryChunks(_ chunks: [URL], originalURL: URL) {
+    for chunk in chunks where chunk.path != originalURL.path {
+      try? FileManager.default.removeItem(at: chunk)
+    }
+  }
+
   private func preserveDebugAudioIfNeeded(transcript: String) -> String {
     guard transcript.isEmpty, let debugDirectory else { return "" }
     do {
@@ -83,8 +131,8 @@ final class SpeechSession {
     }
   }
 
-  private func transcribeRecording() -> (String, String) {
-    let request = SFSpeechURLRecognitionRequest(url: recordingURL)
+  private func transcribeAudioURL(_ url: URL, chunkIndex: Int, chunkCount: Int) -> (String, String) {
+    let request = SFSpeechURLRecognitionRequest(url: url)
     request.shouldReportPartialResults = true
     if #available(macOS 13.0, *) {
       request.addsPunctuation = true
@@ -98,7 +146,13 @@ final class SpeechSession {
         let text = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
         if !text.isEmpty {
           transcript = text
-          printJSON(["event": "partial", "transcript": text, "isFinal": result.isFinal])
+          printJSON([
+            "event": "partial",
+            "transcript": text,
+            "isFinal": result.isFinal,
+            "chunkIndex": chunkIndex,
+            "chunkCount": chunkCount
+          ])
         }
         if result.isFinal {
           semaphore.signal()
@@ -115,6 +169,69 @@ final class SpeechSession {
       return (transcript, transcript.isEmpty ? "本机语音识别超时。" : "")
     }
     return (transcript, transcript.isEmpty ? recognitionError : "")
+  }
+
+  private func transcribeAudioFile(_ url: URL) -> (String, String, Int, Double) {
+    let durationSeconds = audioDurationSeconds(url)
+    var chunks: [URL] = [url]
+    var setupErrors: [String] = []
+    do {
+      chunks = try chunkAudioFile(url)
+    } catch {
+      setupErrors.append("音频切片失败，已尝试整段识别：\(error.localizedDescription)")
+      chunks = [url]
+    }
+    defer { removeTemporaryChunks(chunks, originalURL: url) }
+
+    var transcripts: [String] = []
+    var recognitionErrors: [String] = setupErrors
+    for (offset, chunkURL) in chunks.enumerated() {
+      let (chunkTranscript, recognitionError) = transcribeAudioURL(
+        chunkURL,
+        chunkIndex: offset + 1,
+        chunkCount: chunks.count
+      )
+      if !chunkTranscript.isEmpty {
+        transcripts.append(chunkTranscript)
+      }
+      if !recognitionError.isEmpty {
+        recognitionErrors.append("第 \(offset + 1) 段：\(recognitionError)")
+      }
+    }
+    return (
+      transcripts.joined(separator: " "),
+      recognitionErrors.joined(separator: "；"),
+      chunks.count,
+      durationSeconds
+    )
+  }
+
+  func transcribeExistingAudio(path: String) {
+    let url = URL(fileURLWithPath: path)
+    let bytes = fileSize(url)
+    let (transcript, recognitionError, chunkCount, durationSeconds) = transcribeAudioFile(url)
+    printJSON([
+      "event": "final",
+      "transcript": transcript,
+      "recognitionError": recognitionError,
+      "recordingBytes": bytes,
+      "recognitionChunks": chunkCount,
+      "durationSeconds": durationSeconds,
+      "recognizerAvailable": recognizer.isAvailable
+    ])
+  }
+
+  func printChunkInfo(path: String) throws {
+    let url = URL(fileURLWithPath: path)
+    let chunks = try chunkAudioFile(url)
+    defer { removeTemporaryChunks(chunks, originalURL: url) }
+    printJSON([
+      "event": "chunkInfo",
+      "durationSeconds": audioDurationSeconds(url),
+      "recordingBytes": fileSize(url),
+      "recognitionChunks": chunks.count,
+      "chunkBytes": chunks.map { fileSize($0) }
+    ])
   }
 
   func stopAndWait() {
@@ -138,7 +255,7 @@ final class SpeechSession {
       "recognizerAvailable": recognizer.isAvailable
     ])
 
-    let (transcript, recognitionError) = transcribeRecording()
+    let (transcript, recognitionError, chunkCount, durationSeconds) = transcribeAudioFile(recordingURL)
     let debugAudioPath = preserveDebugAudioIfNeeded(transcript: transcript)
     printJSON([
       "event": "final",
@@ -147,6 +264,8 @@ final class SpeechSession {
       "recordingBytes": bytes,
       "peakPower": peakPower,
       "averagePower": averagePower,
+      "recognitionChunks": chunkCount,
+      "durationSeconds": durationSeconds,
       "recognizerAvailable": recognizer.isAvailable,
       "debugAudioPath": debugAudioPath
     ])
@@ -175,15 +294,19 @@ func waitUntil(timeout: TimeInterval, _ condition: @escaping () -> Bool) -> Bool
   return condition()
 }
 
-func requestPermissions() {
+func requestPermissions(needsMicrophone: Bool) {
   var speechStatus: SFSpeechRecognizerAuthorizationStatus?
   var microphoneGranted: Bool?
 
   SFSpeechRecognizer.requestAuthorization { status in
     speechStatus = status
   }
-  AVCaptureDevice.requestAccess(for: .audio) { granted in
-    microphoneGranted = granted
+  if needsMicrophone {
+    AVCaptureDevice.requestAccess(for: .audio) { granted in
+      microphoneGranted = granted
+    }
+  } else {
+    microphoneGranted = true
   }
 
   _ = waitUntil(timeout: 20) { speechStatus != nil && microphoneGranted != nil }
@@ -208,10 +331,36 @@ let debugDirectoryPath = debugDirIndex.flatMap { index -> String? in
   return next < CommandLine.arguments.endIndex ? CommandLine.arguments[next] : nil
 }
 
-requestPermissions()
+let inputIndex = CommandLine.arguments.firstIndex(of: "--input")
+let inputPath = inputIndex.flatMap { index -> String? in
+  let next = CommandLine.arguments.index(after: index)
+  return next < CommandLine.arguments.endIndex ? CommandLine.arguments[next] : nil
+}
+
+let chunkInfoIndex = CommandLine.arguments.firstIndex(of: "--chunk-info")
+let chunkInfoPath = chunkInfoIndex.flatMap { index -> String? in
+  let next = CommandLine.arguments.index(after: index)
+  return next < CommandLine.arguments.endIndex ? CommandLine.arguments[next] : nil
+}
+
+if let chunkInfoPath, !chunkInfoPath.isEmpty {
+  do {
+    let session = try SpeechSession(localeIdentifier: localeIdentifier, debugDirectoryPath: nil)
+    try session.printChunkInfo(path: chunkInfoPath)
+    exit(0)
+  } catch {
+    fail(error.localizedDescription)
+  }
+}
+
+requestPermissions(needsMicrophone: inputPath == nil)
 
 do {
   let session = try SpeechSession(localeIdentifier: localeIdentifier, debugDirectoryPath: debugDirectoryPath)
+  if let inputPath, !inputPath.isEmpty {
+    session.transcribeExistingAudio(path: inputPath)
+    exit(0)
+  }
   try session.start()
   DispatchQueue.global(qos: .userInitiated).async {
     _ = readLine()
