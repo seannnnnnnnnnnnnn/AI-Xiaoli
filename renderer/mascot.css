@@ -22,6 +22,7 @@ button {
   --look-y: 0px;
   --mascot-scale: 1;
   --alert-zoom: 1;
+  --task-reveal-top: 100%;
 }
 
 .drag-zone {
@@ -69,6 +70,54 @@ button {
 
 .quick-actions button:hover {
   background: rgba(244, 124, 28, 0.88);
+}
+
+.resize-handle {
+  position: absolute;
+  right: calc(50% - 154px);
+  bottom: 18px;
+  z-index: 7;
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  border-radius: 50%;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.9), rgba(255, 230, 194, 0.82)),
+    rgba(24, 20, 36, 0.26);
+  box-shadow: 0 10px 22px rgba(20, 16, 28, 0.22);
+  cursor: nwse-resize;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(4px, 8px) scale(0.9);
+  transition: opacity 150ms ease-out, transform 180ms cubic-bezier(0.2, 1.1, 0.24, 1);
+  -webkit-app-region: no-drag;
+}
+
+.resize-handle::before,
+.resize-handle::after {
+  content: "";
+  position: absolute;
+  right: 9px;
+  bottom: 9px;
+  width: 12px;
+  height: 2px;
+  border-radius: 99px;
+  background: #ec6d20;
+  transform: rotate(-45deg);
+}
+
+.resize-handle::after {
+  right: 8px;
+  bottom: 14px;
+  width: 8px;
+}
+
+.mascot-shell.hover .resize-handle,
+.mascot-shell.resizing .resize-handle,
+.resize-handle:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(0, 0) scale(1);
 }
 
 .bubble {
@@ -423,6 +472,33 @@ button {
 .body-layer {
   clip-path: none;
   transform-origin: 50% 58%;
+}
+
+.task-color-layer {
+  z-index: 3;
+  clip-path: inset(var(--task-reveal-top) 0 0 0);
+  opacity: 0;
+  pointer-events: none;
+  transition: clip-path 420ms ease, opacity 220ms ease;
+}
+
+.task-color-layer img {
+  filter: none;
+}
+
+.mascot-shell.time-block-active .body-layer img {
+  filter: grayscale(1) saturate(0.22) brightness(0.9);
+}
+
+.mascot-shell.time-block-active .task-color-layer {
+  opacity: 1;
+}
+
+.mascot-shell.time-block-active .aura {
+  opacity: 0.24;
+  background:
+    radial-gradient(circle at 50% 24%, rgba(255, 150, 42, 0.26), transparent 38%),
+    radial-gradient(circle at 44% 78%, rgba(0, 122, 255, 0.24), transparent 44%);
 }
 
 .cape-layer,

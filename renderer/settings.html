@@ -108,6 +108,16 @@
           </div>
 
           <form id="reminderForm" class="detail-form">
+            <div class="reminder-kind-segment" aria-label="提醒类型">
+              <label>
+                <input type="radio" name="reminderKind" value="instant" checked />
+                <span>单点提醒</span>
+              </label>
+              <label>
+                <input type="radio" name="reminderKind" value="timeBlock" />
+                <span>时间块</span>
+              </label>
+            </div>
             <label>
               标题
               <input id="titleInput" type="text" maxlength="80" required placeholder="例：检查视频任务" />
@@ -118,10 +128,14 @@
             </label>
             <div class="field-grid">
               <label>
-                日期和时间
+                开始时间
                 <input id="dueInput" type="datetime-local" required />
               </label>
-              <label>
+              <label id="endTimeField" hidden>
+                结束时间
+                <input id="endInput" type="datetime-local" />
+              </label>
+              <label id="repeatField">
                 重复
                 <select id="repeatInput">
                   <option value="none">不重复</option>

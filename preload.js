@@ -36,7 +36,8 @@ const eventChannels = new Set([
   "settings:focusJustNow",
   "reminders:changed",
   "mascot:remind",
-  "mascot:state"
+  "mascot:state",
+  "mascot:timeBlock"
 ]);
 
 const sendChannels = new Set([
@@ -45,6 +46,9 @@ const sendChannels = new Set([
   "mascot:dragStart",
   "mascot:dragMove",
   "mascot:dragEnd",
+  "mascot:resizeStart",
+  "mascot:resizeMove",
+  "mascot:resizeEnd",
   "activity:record"
 ]);
 

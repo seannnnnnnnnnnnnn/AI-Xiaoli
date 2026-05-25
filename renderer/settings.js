@@ -4,6 +4,10 @@ const resetFormBtn = document.querySelector("#resetFormBtn");
 const titleInput = document.querySelector("#titleInput");
 const bodyInput = document.querySelector("#bodyInput");
 const dueInput = document.querySelector("#dueInput");
+const endInput = document.querySelector("#endInput");
+const endTimeField = document.querySelector("#endTimeField");
+const repeatField = document.querySelector("#repeatField");
+const reminderKindInputs = Array.from(document.querySelectorAll("input[name='reminderKind']"));
 const repeatInput = document.querySelector("#repeatInput");
 const sourceInput = document.querySelector("#sourceInput");
 const saveReminderBtn = document.querySelector("#saveReminderBtn");
@@ -176,9 +180,42 @@ function formatDue(iso, reminder = {}) {
   }).format(date);
 }
 
+function formatTimeOnly(value) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "--:--";
+  return new Intl.DateTimeFormat("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
+}
+
+function isTimeBlock(reminder) {
+  return reminder?.kind === "timeBlock";
+}
+
+function formatReminderSchedule(reminder) {
+  if (!isTimeBlock(reminder)) return formatDue(reminder.dueAt, reminder);
+  const start = new Date(reminder.startAt || reminder.dueAt);
+  const end = new Date(reminder.endAt);
+  const range = `${formatTimeOnly(start)}-${formatTimeOnly(end)}`;
+  if (isSameDay(start)) return `今天 ${range}`;
+  if (isTomorrow(start)) return `明天 ${range}`;
+  return `${new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", weekday: "short" }).format(start)} ${range}`;
+}
+
+function timeBlockProgress(reminder) {
+  if (!isTimeBlock(reminder)) return null;
+  const startMs = new Date(reminder.startAt || reminder.dueAt).getTime();
+  const endMs = new Date(reminder.endAt).getTime();
+  const nowMs = Date.now();
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs || nowMs < startMs || nowMs > endMs) return null;
+  return Math.min(Math.max((nowMs - startMs) / (endMs - startMs), 0), 1);
+}
+
 function dueClass(reminder) {
-  const dueMs = new Date(reminder.dueAt).getTime();
+  const dueMs = new Date(reminder.startAt || reminder.dueAt).getTime();
   if (!Number.isFinite(dueMs)) return "";
+  if (timeBlockProgress(reminder) !== null) return "due-active";
   if (reminder.enabled && dueMs < Date.now()) return "due-overdue";
   if (isSameDay(new Date(dueMs))) return "due-today";
   return "";
@@ -194,6 +231,27 @@ function escapeHtml(text) {
 
 function defaultDueDate() {
   return new Date(Date.now() + 5 * 60 * 1000);
+}
+
+function defaultEndDate(start = defaultDueDate()) {
+  return new Date(start.getTime() + 60 * 60 * 1000);
+}
+
+function reminderKind() {
+  return reminderKindInputs.find((input) => input.checked)?.value === "timeBlock" ? "timeBlock" : "instant";
+}
+
+function setReminderKind(kind) {
+  const target = kind === "timeBlock" ? "timeBlock" : "instant";
+  reminderKindInputs.forEach((input) => {
+    input.checked = input.value === target;
+  });
+  const isTimeBlock = target === "timeBlock";
+  endTimeField.hidden = !isTimeBlock;
+  repeatField.classList.toggle("repeat-field-compact", isTimeBlock);
+  if (isTimeBlock && !endInput.value) {
+    endInput.value = localInputValue(defaultEndDate(new Date(dueInput.value || defaultDueDate())));
+  }
 }
 
 function setInspectorMode(mode) {
@@ -214,7 +272,10 @@ function resetForm() {
   resetFormBtn.hidden = true;
   titleInput.value = "";
   bodyInput.value = "";
-  dueInput.value = localInputValue(defaultDueDate());
+  const start = defaultDueDate();
+  dueInput.value = localInputValue(start);
+  endInput.value = localInputValue(defaultEndDate(start));
+  setReminderKind("instant");
   repeatInput.value = "none";
   sourceInput.value = "";
   setInspectorMode("reminder");
@@ -229,7 +290,12 @@ function fillForm(reminder) {
   resetFormBtn.hidden = false;
   titleInput.value = reminder.title;
   bodyInput.value = reminder.body || "";
-  dueInput.value = localInputValue(new Date(reminder.dueAt));
+  setReminderKind(reminder.kind === "timeBlock" ? "timeBlock" : "instant");
+  const start = new Date(reminder.startAt || reminder.dueAt);
+  dueInput.value = localInputValue(start);
+  endInput.value = reminder.kind === "timeBlock" && reminder.endAt
+    ? localInputValue(new Date(reminder.endAt))
+    : localInputValue(defaultEndDate(start));
   repeatInput.value = reminder.repeat;
   sourceInput.value = reminder.sourceLabel || "";
   setInspectorMode("reminder");
@@ -238,15 +304,23 @@ function fillForm(reminder) {
 }
 
 function reminderPayload() {
-  return {
+  const kind = reminderKind();
+  const startAt = isoFromLocalInput(dueInput.value);
+  const payload = {
     id: editingId || undefined,
+    kind,
     title: titleInput.value.trim(),
     body: bodyInput.value.trim(),
-    dueAt: isoFromLocalInput(dueInput.value),
+    dueAt: startAt,
+    startAt,
     repeat: repeatInput.value,
     sourceLabel: sourceInput.value.trim(),
     enabled: true
   };
+  if (kind === "timeBlock") {
+    payload.endAt = isoFromLocalInput(endInput.value);
+  }
+  return payload;
 }
 
 function renderSettings(nextSettings) {
@@ -403,7 +477,7 @@ async function openJustNowHistory(id = justNowHistorySelect.value) {
 }
 
 function reminderDueMs(reminder) {
-  const dueMs = new Date(reminder.dueAt).getTime();
+  const dueMs = new Date(reminder.startAt || reminder.dueAt).getTime();
   return Number.isFinite(dueMs) ? dueMs : Number.MAX_SAFE_INTEGER;
 }
 
@@ -416,7 +490,7 @@ function sortedForDisplay(items) {
 
 function matchesSearch(reminder) {
   if (!searchText) return true;
-  const haystack = [reminder.title, reminder.body, reminder.sourceLabel, repeatLabels[reminder.repeat]]
+  const haystack = [reminder.title, reminder.body, reminder.sourceLabel, repeatLabels[reminder.repeat], isTimeBlock(reminder) ? "时间块" : "单点提醒"]
     .join(" ")
     .toLocaleLowerCase("zh-CN");
   return haystack.includes(searchText);
@@ -424,8 +498,11 @@ function matchesSearch(reminder) {
 
 function matchesFilter(reminder) {
   if (activeSource && (reminder.sourceLabel || "无标签") !== activeSource) return false;
-  const due = new Date(reminder.dueAt);
-  if (activeFilter === "today") return reminder.enabled && isSameDay(due);
+  const due = new Date(reminder.startAt || reminder.dueAt);
+  const end = new Date(reminder.endAt);
+  if (activeFilter === "today") {
+    return reminder.enabled && (isSameDay(due) || (isTimeBlock(reminder) && Number.isFinite(end.getTime()) && isSameDay(end)));
+  }
   if (activeFilter === "scheduled") return reminder.enabled && reminderDueMs(reminder) >= startOfDay().getTime();
   if (activeFilter === "disabled") return !reminder.enabled;
   return true;
@@ -440,7 +517,11 @@ function countBy(predicate) {
 }
 
 function renderNavigationCounts() {
-  document.querySelector("#todayCount").textContent = String(countBy((item) => item.enabled && isSameDay(new Date(item.dueAt))));
+  document.querySelector("#todayCount").textContent = String(countBy((item) => {
+    const start = new Date(item.startAt || item.dueAt);
+    const end = new Date(item.endAt);
+    return item.enabled && (isSameDay(start) || (isTimeBlock(item) && Number.isFinite(end.getTime()) && isSameDay(end)));
+  }));
   document.querySelector("#scheduledCount").textContent = String(countBy((item) => item.enabled && reminderDueMs(item) >= startOfDay().getTime()));
   document.querySelector("#allCount").textContent = String(reminders.length);
   document.querySelector("#disabledCount").textContent = String(countBy((item) => !item.enabled));
@@ -486,7 +567,7 @@ function renderNextPreview() {
     nextReminderPreview.textContent = "暂无待提醒";
     return;
   }
-  nextReminderPreview.textContent = `${formatDue(upcoming.dueAt, upcoming)} · ${upcoming.title}`;
+  nextReminderPreview.textContent = `${formatReminderSchedule(upcoming)} · ${upcoming.title}`;
 }
 
 function emptyMessage() {
@@ -507,18 +588,24 @@ function renderReminderRows(visibleReminders) {
     const source = reminder.sourceLabel ? `<span class="pill source">${escapeHtml(reminder.sourceLabel)}</span>` : "";
     const repeat = reminder.repeat !== "none" ? `<span class="pill repeat">${repeatLabels[reminder.repeat] || reminder.repeat}</span>` : "";
     const snooze = reminder.snoozeCount ? `<span class="pill snooze">稍后 ${reminder.snoozeCount}</span>` : "";
+    const kindPill = isTimeBlock(reminder) ? '<span class="pill block-kind">时间块</span>' : '<span class="pill instant-kind">单点</span>';
+    const progress = timeBlockProgress(reminder);
+    const progressPill = progress === null ? "" : `<span class="pill block-progress">进行中 ${Math.round(progress * 100)}%</span>`;
+    const progressStyle = progress === null ? "" : ` style="--row-progress:${progress.toFixed(3)}"`;
     const selected = reminder.id === editingId ? "selected" : "";
     const disabled = reminder.enabled ? "" : "disabled";
     const toggleLabel = reminder.enabled ? "停用提醒" : "启用提醒";
     return `
-      <article class="reminder-row ${selected} ${disabled}" data-id="${reminder.id}">
+      <article class="reminder-row ${isTimeBlock(reminder) ? "time-block-row" : "instant-row"} ${selected} ${disabled}" data-id="${reminder.id}"${progressStyle}>
         <button class="check-toggle" data-action="toggle" type="button" title="${toggleLabel}" aria-label="${toggleLabel}"></button>
         <button class="reminder-main" data-action="edit" type="button">
+          <span class="reminder-schedule ${dueClass(reminder)}">${escapeHtml(formatReminderSchedule(reminder))}</span>
           <span class="reminder-title">${escapeHtml(reminder.title)}</span>
           ${body}
           <span class="reminder-meta">
-            <span class="pill ${dueClass(reminder)}">${formatDue(reminder.dueAt, reminder)}</span>
+            ${kindPill}
             ${repeat}
+            ${progressPill}
             ${snooze}
             ${source}
           </span>
@@ -566,6 +653,20 @@ sourceList.addEventListener("click", (event) => {
 searchInput.addEventListener("input", () => {
   searchText = searchInput.value.trim().toLocaleLowerCase("zh-CN");
   renderReminders(reminders);
+});
+
+reminderKindInputs.forEach((input) => {
+  input.addEventListener("change", () => setReminderKind(input.value));
+});
+
+dueInput.addEventListener("change", () => {
+  if (reminderKind() !== "timeBlock") return;
+  const start = new Date(dueInput.value);
+  const end = new Date(endInput.value);
+  if (!Number.isFinite(start.getTime())) return;
+  if (!Number.isFinite(end.getTime()) || end.getTime() <= start.getTime()) {
+    endInput.value = localInputValue(defaultEndDate(start));
+  }
 });
 
 newReminderBtn.addEventListener("click", resetForm);

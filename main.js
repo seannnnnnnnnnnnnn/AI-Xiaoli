@@ -26,9 +26,11 @@ const DEFAULT_SNOOZE_MINUTES = 10;
 const MASCOT_SIZE = { width: 480, height: 680 };
 const MIN_MASCOT_SCALE = 0.7;
 const MAX_MASCOT_SCALE = 1.45;
+const DEFAULT_TIME_BLOCK_MINUTES = 60;
 const SETTINGS_SIZE = { width: 1160, height: 820 };
 const SUMMARY_HISTORY_LIMIT = 60;
 const VALID_REPEATS = new Set(["none", "daily", "weekly", "monthly"]);
+const VALID_REMINDER_KINDS = new Set(["instant", "timeBlock"]);
 const FUTURE_DUE_GRACE_MS = 1000;
 const JUST_NOW_START_TIMEOUT_MS = 12000;
 const JUST_NOW_STOP_TIMEOUT_MS = 150000;
@@ -64,6 +66,7 @@ let saveBoundsTimer = null;
 let mousePollTimer = null;
 let mousePassthroughEnabled = null;
 let mascotDragState = null;
+let mascotResizeState = null;
 let mascotBubbleInteractive = false;
 let activityTimer = null;
 let currentForeground = null;
@@ -1023,17 +1026,29 @@ function saveReminders() {
 
 function normalizeStoredReminder(reminder) {
   if (!reminder || typeof reminder !== "object") return null;
-  const due = new Date(reminder.dueAt);
-  if (!Number.isFinite(due.getTime())) return null;
+  const kind = VALID_REMINDER_KINDS.has(reminder.kind)
+    ? reminder.kind
+    : (reminder.type === "timeBlock" ? "timeBlock" : "instant");
+  const start = new Date(reminder.startAt || reminder.dueAt);
+  const due = new Date(reminder.dueAt || reminder.startAt);
+  if (!Number.isFinite(due.getTime()) && !Number.isFinite(start.getTime())) return null;
+  const normalizedStart = Number.isFinite(start.getTime()) ? start : due;
+  let normalizedEnd = reminder.endAt ? new Date(reminder.endAt) : null;
+  if (kind === "timeBlock" && (!normalizedEnd || !Number.isFinite(normalizedEnd.getTime()) || normalizedEnd.getTime() <= normalizedStart.getTime())) {
+    normalizedEnd = new Date(normalizedStart.getTime() + DEFAULT_TIME_BLOCK_MINUTES * 60 * 1000);
+  }
   const nowIso = new Date().toISOString();
   const lastFiredAtDate = reminder.lastFiredAt ? new Date(reminder.lastFiredAt) : null;
   const lastSnoozedAtDate = reminder.lastSnoozedAt ? new Date(reminder.lastSnoozedAt) : null;
   const snoozeReturnDueAtDate = reminder.snoozeReturnDueAt ? new Date(reminder.snoozeReturnDueAt) : null;
   return {
     id: String(reminder.id || crypto.randomUUID()),
+    kind,
     title: String(reminder.title || "提醒").trim() || "提醒",
     body: String(reminder.body || "").trim(),
-    dueAt: due.toISOString(),
+    dueAt: (kind === "timeBlock" || !Number.isFinite(due.getTime()) ? normalizedStart : due).toISOString(),
+    startAt: normalizedStart.toISOString(),
+    endAt: kind === "timeBlock" ? normalizedEnd.toISOString() : "",
     repeat: VALID_REPEATS.has(reminder.repeat) ? reminder.repeat : "none",
     enabled: reminder.enabled !== false,
     sourceLabel: String(reminder.sourceLabel || "").trim(),
@@ -1048,6 +1063,7 @@ function normalizeStoredReminder(reminder) {
     lastFiredAt: lastFiredAtDate && Number.isFinite(lastFiredAtDate.getTime())
       ? lastFiredAtDate.toISOString()
       : "",
+    lastFiredForDueAt: String(reminder.lastFiredForDueAt || "").trim(),
     createdAt: reminder.createdAt || nowIso,
     updatedAt: reminder.updatedAt || nowIso
   };
@@ -1055,10 +1071,11 @@ function normalizeStoredReminder(reminder) {
 
 function normalizeReminderInput(input, current = {}) {
   const nowIso = new Date().toISOString();
-  const due = new Date(input?.dueAt ?? current.dueAt);
-  if (!Number.isFinite(due.getTime())) {
-    throw new Error("提醒时间无效。");
-  }
+  const kind = VALID_REMINDER_KINDS.has(input?.kind)
+    ? input.kind
+    : (VALID_REMINDER_KINDS.has(current.kind) ? current.kind : "instant");
+  const due = new Date(input?.dueAt ?? input?.startAt ?? current.dueAt ?? current.startAt);
+  if (!Number.isFinite(due.getTime())) throw new Error("提醒时间无效。");
   const repeat = input?.repeat ?? current.repeat ?? "none";
   if (!VALID_REPEATS.has(repeat)) {
     throw new Error("重复频率无效。");
@@ -1068,12 +1085,37 @@ function normalizeReminderInput(input, current = {}) {
     throw new Error("提醒标题不能为空。");
   }
   const enabled = input?.enabled === undefined ? current.enabled !== false : Boolean(input.enabled);
-  const normalizedDueAt = normalizeDueAtForSave(due, repeat, enabled);
+  let normalizedDueAt = "";
+  let startAt = due.toISOString();
+  let endAt = "";
+  if (kind === "timeBlock") {
+    const rawEnd = new Date(input?.endAt ?? current.endAt);
+    if (!Number.isFinite(rawEnd.getTime())) throw new Error("请选择有效的结束时间。");
+    const durationMs = rawEnd.getTime() - due.getTime();
+    if (durationMs < 5 * 60 * 1000) throw new Error("时间块至少需要 5 分钟。");
+    if (repeat === "none") {
+      if (enabled && rawEnd.getTime() <= Date.now() + FUTURE_DUE_GRACE_MS) {
+        throw new Error("时间块结束时间需要晚于当前时间。");
+      }
+      normalizedDueAt = due.toISOString();
+    } else {
+      normalizedDueAt = normalizeDueAtForSave(due, repeat, enabled);
+    }
+    const normalizedStart = new Date(normalizedDueAt);
+    startAt = normalizedStart.toISOString();
+    endAt = new Date(normalizedStart.getTime() + durationMs).toISOString();
+  } else {
+    normalizedDueAt = normalizeDueAtForSave(due, repeat, enabled);
+    startAt = normalizedDueAt;
+  }
   return {
     id: current.id || crypto.randomUUID(),
+    kind,
     title,
     body: String(input?.body ?? current.body ?? "").trim(),
     dueAt: normalizedDueAt,
+    startAt,
+    endAt,
     repeat,
     enabled,
     sourceLabel: String(input?.sourceLabel ?? current.sourceLabel ?? "").trim(),
@@ -1082,6 +1124,7 @@ function normalizeReminderInput(input, current = {}) {
     lastSnoozedAt: current.lastSnoozedAt || "",
     snoozeReturnDueAt: current.snoozeReturnDueAt || "",
     lastFiredAt: current.lastFiredAt || "",
+    lastFiredForDueAt: current.lastFiredForDueAt === normalizedDueAt ? current.lastFiredForDueAt : "",
     createdAt: current.createdAt || nowIso,
     updatedAt: nowIso
   };
@@ -1105,7 +1148,7 @@ function normalizeDueAtForSave(due, repeat, enabled = true) {
 function sortedReminders() {
   return [...reminders].sort((left, right) => {
     if (left.enabled !== right.enabled) return left.enabled ? -1 : 1;
-    return new Date(left.dueAt).getTime() - new Date(right.dueAt).getTime();
+    return new Date(left.startAt || left.dueAt).getTime() - new Date(right.startAt || right.dueAt).getTime();
   });
 }
 
@@ -1127,10 +1170,12 @@ function snoozeReminder(id, minutes = DEFAULT_SNOOZE_MINUTES) {
   const snoozed = {
     ...original,
     dueAt,
+    startAt: original.kind === "timeBlock" ? (original.startAt || original.dueAt) : dueAt,
     enabled: true,
     snoozeCount: (original.snoozeCount || 0) + 1,
     lastSnoozedAt: nowIso,
     snoozeReturnDueAt: original.repeat === "none" ? "" : (original.snoozeReturnDueAt || original.dueAt),
+    lastFiredForDueAt: "",
     updatedAt: nowIso
   };
   reminders[index] = snoozed;
@@ -1173,6 +1218,7 @@ function broadcastSettings() {
 
 function broadcastReminders() {
   broadcast("reminders:changed", sortedReminders());
+  sendCurrentTimeBlockState();
 }
 
 function publicSettings() {
@@ -1300,7 +1346,7 @@ function resizeMascotWindowForScale(nextScale, preserveBottomRight = true) {
 function setMascotMousePassthrough(ignore) {
   if (!mascotWindow || mascotWindow.isDestroyed()) return;
   const next = Boolean(ignore);
-  if (mascotDragState && next) return;
+  if ((mascotDragState || mascotResizeState) && next) return;
   if (mousePassthroughEnabled === next) return;
   mousePassthroughEnabled = next;
   mascotWindow.setIgnoreMouseEvents(next, { forward: true });
@@ -1334,16 +1380,18 @@ function mascotInteractiveRegion() {
   const actionSize = 132 * scale;
   const actionLeft = (bounds.width / 2) + (82 * scale);
   const actionTop = bodyTop + (54 * scale);
+  const resizeSize = 74 * scale;
   regions.push(
     { x: bodyLeft, y: bodyTop, width: bodyWidth, height: bodyHeight },
-    { x: actionLeft - 12, y: actionTop - 12, width: actionSize, height: actionSize }
+    { x: actionLeft - 12, y: actionTop - 12, width: actionSize, height: actionSize },
+    { x: bounds.width - resizeSize - 12, y: bounds.height - resizeSize - 12, width: resizeSize + 16, height: resizeSize + 16 }
   );
   return regions;
 }
 
 function updateMascotMousePassthroughFromCursor() {
   if (!mascotWindow || mascotWindow.isDestroyed() || !mascotWindow.isVisible()) return;
-  if (mascotDragState) {
+  if (mascotDragState || mascotResizeState) {
     setMascotMousePassthrough(false);
     return;
   }
@@ -1536,6 +1584,7 @@ function createMascotWindow() {
     stopMascotMousePoll();
     mousePassthroughEnabled = null;
     mascotDragState = null;
+    mascotResizeState = null;
     mascotBubbleInteractive = false;
     mascotWindow = null;
   });
@@ -1780,6 +1829,38 @@ function sendMascotState() {
       mascotScale: normalizedScale(settings.mascotScale),
       notificationBarPinned: Boolean(settings.notificationBarPinned)
     });
+    sendCurrentTimeBlockState();
+  }
+}
+
+function currentTimeBlockState(nowMs = Date.now()) {
+  const active = sortedReminders().find((reminder) => {
+    if (!reminder.enabled || reminder.kind !== "timeBlock") return false;
+    const startMs = new Date(reminder.startAt || reminder.dueAt).getTime();
+    const endMs = new Date(reminder.endAt).getTime();
+    return Number.isFinite(startMs) && Number.isFinite(endMs) && startMs <= nowMs && endMs > nowMs;
+  });
+  if (!active) return { active: false };
+  const startMs = new Date(active.startAt || active.dueAt).getTime();
+  const endMs = new Date(active.endAt).getTime();
+  const progress = Math.min(Math.max((nowMs - startMs) / Math.max(endMs - startMs, 1), 0), 1);
+  return {
+    active: true,
+    id: active.id,
+    title: active.title,
+    body: active.body,
+    sourceLabel: active.sourceLabel,
+    startAt: active.startAt || active.dueAt,
+    endAt: active.endAt,
+    startAtLocal: formatLocalDateTime(active.startAt || active.dueAt),
+    endAtLocal: formatLocalDateTime(active.endAt),
+    progress
+  };
+}
+
+function sendCurrentTimeBlockState() {
+  if (mascotWindow && !mascotWindow.isDestroyed()) {
+    mascotWindow.webContents.send("mascot:timeBlock", currentTimeBlockState());
   }
 }
 
@@ -1962,10 +2043,15 @@ function compactActivityEvent(event) {
           appName: String(event.meta.appName || "").slice(0, 80),
           windowTitle: String(event.meta.windowTitle || "").slice(0, 160),
           reminderId: String(event.meta.reminderId || "").slice(0, 80),
+          kind: String(event.meta.kind || "").slice(0, 20),
           previousDueAt: String(event.meta.previousDueAt || "").slice(0, 40),
           previousDueAtLocal: formatLocalDateTime(event.meta.previousDueAt, { seconds: true }) || undefined,
           dueAt: String(event.meta.dueAt || "").slice(0, 40),
           dueAtLocal: formatLocalDateTime(event.meta.dueAt, { seconds: true }) || undefined,
+          startAt: String(event.meta.startAt || "").slice(0, 40),
+          startAtLocal: formatLocalDateTime(event.meta.startAt, { seconds: true }) || undefined,
+          endAt: String(event.meta.endAt || "").slice(0, 40),
+          endAtLocal: formatLocalDateTime(event.meta.endAt, { seconds: true }) || undefined,
           repeat: String(event.meta.repeat || "").slice(0, 20),
           minutes: Number.isFinite(Number(event.meta.minutes)) ? Number(event.meta.minutes) : undefined,
           snoozeCount: Number.isFinite(Number(event.meta.snoozeCount)) ? Number(event.meta.snoozeCount) : undefined,
@@ -1986,13 +2072,14 @@ function localActivitySummary({ label, events, stats }) {
     : "暂时没有前台 App 时长统计。";
   const reminderCount = (stats.counts["reminder.fire"] || 0) + (stats.counts["reminder.create"] || 0);
   const snoozeCount = stats.counts["reminder.snooze"] || 0;
+  const timeBlockEndCount = stats.counts["timeblock.end"] || 0;
   const latest = events.slice(-6).map((event) => {
     const time = new Date(event.ts).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
     return `- ${time} ${event.source || event.type}：${event.title || event.detail || event.type}`;
   }).join("\n");
   return [
     `${label}本地统计：共记录 ${stats.totalEvents} 条活动。${appLine}`,
-    `提醒相关事件 ${reminderCount} 条，其中拖延/稍后提醒 ${snoozeCount} 条；聆听/桌宠交互 ${stats.counts["mascot.listen"] || 0} 条。`,
+    `提醒相关事件 ${reminderCount} 条，时间块结束 ${timeBlockEndCount} 条，拖延/稍后提醒 ${snoozeCount} 条；聆听/桌宠交互 ${stats.counts["mascot.listen"] || 0} 条。`,
     "最近活动：",
     latest
   ].join("\n");
@@ -2082,16 +2169,25 @@ async function summarizeActivities(input = {}) {
   const reviewTemplate = resolveSummaryTemplate(input.templateId);
   const events = readActivityEvents({ start, end });
   const stats = summarizeActivityStats(events);
+  const activeTimeBlock = currentTimeBlockState();
   const remindersSnapshot = sortedReminders().slice(0, 80).map((reminder) => ({
     title: reminder.title,
     body: reminder.body,
+    kind: reminder.kind || "instant",
     dueAt: reminder.dueAt,
     dueAtLocal: formatLocalDateTime(reminder.dueAt, { seconds: true }),
+    startAt: reminder.startAt || reminder.dueAt,
+    startAtLocal: formatLocalDateTime(reminder.startAt || reminder.dueAt, { seconds: true }),
+    endAt: reminder.endAt || "",
+    endAtLocal: formatLocalDateTime(reminder.endAt, { seconds: true }),
     repeat: reminder.repeat,
     enabled: reminder.enabled,
     sourceLabel: reminder.sourceLabel,
     lastFiredAt: reminder.lastFiredAt,
-    lastFiredAtLocal: formatLocalDateTime(reminder.lastFiredAt, { seconds: true })
+    lastFiredAtLocal: formatLocalDateTime(reminder.lastFiredAt, { seconds: true }),
+    timeBlockProgress: reminder.kind === "timeBlock" && reminder.enabled
+      ? activeTimeBlock.id === reminder.id ? activeTimeBlock.progress : undefined
+      : undefined
   }));
   const localSummary = localActivitySummary({ label, events, stats });
   const payload = {
@@ -2138,12 +2234,13 @@ async function summarizeActivities(input = {}) {
         "你是 AI小力的私人活动总结助手。",
         "只根据用户提供的本地活动日志、提醒数据和前台 App 统计总结，不要编造未出现的事实。",
         "时间规则必须严格遵守：payload.range.timeZone 是用户本地时区；事件里的 time、timeLocal、startedAt、endedAt、dueAtLocal 是本地时间；timeUtc、startedAtUtc、endedAtUtc、dueAt 是 UTC 原始值。总结时间线一律使用本地时间，不要把 UTC 小时当成本地小时。",
-        "如果活动日志里出现 reminder.snooze，要把它视为任务拖延/稍后提醒信号，可用于总结执行阻力和待跟进风险。",
+        "如果提醒数据里 kind=timeBlock，代表用户规划了一个开始-结束时间块；复盘时要区分计划时间、开始提醒、结束记录和稍后提醒。",
+        "如果活动日志里出现 reminder.snooze，要把它视为任务拖延/稍后提醒信号；如果出现 timeblock.end，要把它视为时间块结束信号，可用于总结计划执行情况。",
         "用户会提供一个 Markdown 复盘模板，它是本次总结的前置需求模板；在不违背真实性和安全限制的前提下优先遵循。",
         "输出中文 HTML 片段，不要输出 Markdown，不要输出完整 html/body/head。",
         "只允许使用这些标签：article、section、h3、p、ul、li、strong、span。",
         "最外层使用 <article class=\"review-card\">。",
-        "结构要适合在桌面应用内展示，包含：总体判断、时间线、主要成果、注意力分布、待跟进建议。",
+        "结构要适合在桌面应用内展示，包含：总体判断、时间线、计划时间块执行情况、主要成果、注意力分布、待跟进建议。",
         "如果数据不足，要明确说明缺口。不要使用 script、style、iframe、图片、链接或事件属性。"
       ].join("\n")
     },
@@ -2180,10 +2277,13 @@ async function summarizeActivities(input = {}) {
 function fireReminder(reminder) {
   const payload = {
     id: reminder.id,
+    kind: reminder.kind,
     title: reminder.title,
     body: reminder.body,
     sourceLabel: reminder.sourceLabel,
-    dueAt: reminder.dueAt
+    dueAt: reminder.dueAt,
+    startAt: reminder.startAt || reminder.dueAt,
+    endAt: reminder.endAt || ""
   };
   appendActivity({
     type: "reminder.fire",
@@ -2192,6 +2292,9 @@ function fireReminder(reminder) {
     detail: reminder.body,
     meta: {
       dueAt: reminder.dueAt,
+      startAt: reminder.startAt || reminder.dueAt,
+      endAt: reminder.endAt || "",
+      kind: reminder.kind || "instant",
       repeat: reminder.repeat
     }
   });
@@ -2216,8 +2319,67 @@ function fireReminder(reminder) {
   }
 }
 
+function advanceReminderAfterFire(reminder, nowMs) {
+  if (reminder.kind === "timeBlock") {
+    const startMs = new Date(reminder.startAt || reminder.dueAt).getTime();
+    const endMs = new Date(reminder.endAt).getTime();
+    const durationMs = Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs
+      ? endMs - startMs
+      : DEFAULT_TIME_BLOCK_MINUTES * 60 * 1000;
+    if (Number.isFinite(endMs) && endMs > nowMs) return;
+    appendActivity({
+      type: "timeblock.end",
+      title: reminder.title,
+      source: reminder.sourceLabel || "时间块",
+      detail: reminder.body,
+      meta: {
+        reminderId: reminder.id,
+        startAt: reminder.startAt || reminder.dueAt,
+        endAt: reminder.endAt || "",
+        repeat: reminder.repeat
+      }
+    });
+    if (reminder.repeat === "none") {
+      reminder.enabled = false;
+      return;
+    }
+    const nextStart = nextDueAt(reminder.startAt || reminder.dueAt, reminder.repeat, nowMs);
+    if (!nextStart) {
+      reminder.enabled = false;
+      return;
+    }
+    reminder.startAt = nextStart;
+    reminder.dueAt = nextStart;
+    reminder.endAt = new Date(new Date(nextStart).getTime() + durationMs).toISOString();
+    reminder.snoozeReturnDueAt = "";
+    reminder.lastFiredForDueAt = "";
+    return;
+  }
+
+  if (reminder.repeat === "none") {
+    reminder.enabled = false;
+    return;
+  }
+  const returnDueMs = new Date(reminder.snoozeReturnDueAt || "").getTime();
+  const baseDueAt = Number.isFinite(returnDueMs) ? reminder.snoozeReturnDueAt : reminder.dueAt;
+  const next = Number.isFinite(returnDueMs) && returnDueMs > nowMs
+    ? reminder.snoozeReturnDueAt
+    : nextDueAt(baseDueAt, reminder.repeat, nowMs);
+  if (next) {
+    reminder.dueAt = next;
+    reminder.startAt = next;
+  } else {
+    reminder.enabled = false;
+  }
+  reminder.snoozeReturnDueAt = "";
+}
+
 function checkDueReminders() {
-  if (checkingReminders || settings.paused) return;
+  if (checkingReminders) return;
+  if (settings.paused) {
+    sendCurrentTimeBlockState();
+    return;
+  }
   checkingReminders = true;
   try {
     const nowMs = Date.now();
@@ -2226,28 +2388,31 @@ function checkDueReminders() {
     for (const reminder of reminders) {
       if (!reminder.enabled) continue;
       const dueMs = new Date(reminder.dueAt).getTime();
-      if (!Number.isFinite(dueMs) || dueMs > nowMs) continue;
-      fireReminder(reminder);
-      reminder.lastFiredAt = nowIso;
-      reminder.updatedAt = nowIso;
-      if (reminder.repeat === "none") {
-        reminder.enabled = false;
-      } else {
-        const returnDueMs = new Date(reminder.snoozeReturnDueAt || "").getTime();
-        const baseDueAt = Number.isFinite(returnDueMs) ? reminder.snoozeReturnDueAt : reminder.dueAt;
-        const next = Number.isFinite(returnDueMs) && returnDueMs > nowMs
-          ? reminder.snoozeReturnDueAt
-          : nextDueAt(baseDueAt, reminder.repeat, nowMs);
-        if (next) reminder.dueAt = next;
-        else reminder.enabled = false;
-        reminder.snoozeReturnDueAt = "";
+      if (!Number.isFinite(dueMs)) continue;
+      const alreadyFiredForDueAt = reminder.lastFiredForDueAt === reminder.dueAt;
+      if (dueMs <= nowMs && !alreadyFiredForDueAt) {
+        fireReminder(reminder);
+        reminder.lastFiredAt = nowIso;
+        reminder.lastFiredForDueAt = reminder.dueAt;
+        reminder.updatedAt = nowIso;
+        advanceReminderAfterFire(reminder, nowMs);
+        changed = true;
+        continue;
       }
-      changed = true;
+      if (reminder.kind === "timeBlock" && alreadyFiredForDueAt) {
+        const endMs = new Date(reminder.endAt).getTime();
+        if (Number.isFinite(endMs) && endMs <= nowMs) {
+          advanceReminderAfterFire(reminder, nowMs);
+          reminder.updatedAt = nowIso;
+          changed = true;
+        }
+      }
     }
     if (changed) {
       saveReminders();
       broadcastReminders();
     }
+    sendCurrentTimeBlockState();
   } finally {
     checkingReminders = false;
   }
@@ -2325,6 +2490,39 @@ function installIpcHandlers() {
     saveSettings();
     updateMascotMousePassthroughFromCursor();
   });
+  ipcMain.on("mascot:resizeStart", (event, point = {}) => {
+    if (!mascotWindow || event.sender !== mascotWindow.webContents) return;
+    const x = Number(point.x);
+    const y = Number(point.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    mascotResizeState = {
+      startPoint: { x, y },
+      startScale: normalizedScale(settings.mascotScale),
+      startBounds: mascotWindow.getBounds()
+    };
+    setMascotMousePassthrough(false);
+  });
+  ipcMain.on("mascot:resizeMove", (event, point = {}) => {
+    if (!mascotWindow || event.sender !== mascotWindow.webContents || !mascotResizeState) return;
+    const x = Number(point.x);
+    const y = Number(point.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    const dx = x - mascotResizeState.startPoint.x;
+    const dy = y - mascotResizeState.startPoint.y;
+    const delta = Math.max(dx, dy);
+    const nextScale = normalizedScale(mascotResizeState.startScale + delta / 360);
+    settings.mascotScale = nextScale;
+    resizeMascotWindowForScale(nextScale, false);
+    sendMascotState();
+  });
+  ipcMain.on("mascot:resizeEnd", (event) => {
+    if (!mascotWindow || event.sender !== mascotWindow.webContents) return;
+    mascotResizeState = null;
+    settings.mascotBounds = mascotWindow.getBounds();
+    saveSettings();
+    broadcastSettings();
+    updateMascotMousePassthroughFromCursor();
+  });
 
   ipcMain.handle("settings:get", () => publicSettings());
   ipcMain.handle("settings:update", (_event, patch) => updateSettings(patch || {}));
@@ -2367,7 +2565,13 @@ function installIpcHandlers() {
       title: reminder.title,
       source: reminder.sourceLabel || "提醒",
       detail: reminder.body,
-      meta: { dueAt: reminder.dueAt, repeat: reminder.repeat }
+      meta: {
+        kind: reminder.kind || "instant",
+        dueAt: reminder.dueAt,
+        startAt: reminder.startAt || reminder.dueAt,
+        endAt: reminder.endAt || "",
+        repeat: reminder.repeat
+      }
     });
     return reminder;
   });
@@ -2383,7 +2587,14 @@ function installIpcHandlers() {
       title: reminders[index].title,
       source: reminders[index].sourceLabel || "提醒",
       detail: reminders[index].body,
-      meta: { dueAt: reminders[index].dueAt, repeat: reminders[index].repeat, enabled: reminders[index].enabled }
+      meta: {
+        kind: reminders[index].kind || "instant",
+        dueAt: reminders[index].dueAt,
+        startAt: reminders[index].startAt || reminders[index].dueAt,
+        endAt: reminders[index].endAt || "",
+        repeat: reminders[index].repeat,
+        enabled: reminders[index].enabled
+      }
     });
     return reminders[index];
   });
