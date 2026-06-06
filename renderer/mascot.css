@@ -22,7 +22,6 @@ button {
   --look-y: 0px;
   --mascot-scale: 1;
   --alert-zoom: 1;
-  --task-reveal-top: 100%;
 }
 
 .drag-zone {
@@ -77,19 +76,16 @@ button {
   right: calc(50% - 154px);
   bottom: 18px;
   z-index: 7;
-  width: 34px;
-  height: 34px;
-  border: 1px solid rgba(255, 255, 255, 0.72);
-  border-radius: 50%;
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.9), rgba(255, 230, 194, 0.82)),
-    rgba(24, 20, 36, 0.26);
-  box-shadow: 0 10px 22px rgba(20, 16, 28, 0.22);
+  width: 42px;
+  height: 42px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   cursor: nwse-resize;
   opacity: 0;
   pointer-events: none;
   transform: translate(4px, 8px) scale(0.9);
-  transition: opacity 150ms ease-out, transform 180ms cubic-bezier(0.2, 1.1, 0.24, 1);
+  transition: none;
   -webkit-app-region: no-drag;
 }
 
@@ -97,19 +93,28 @@ button {
 .resize-handle::after {
   content: "";
   position: absolute;
-  right: 9px;
-  bottom: 9px;
-  width: 12px;
-  height: 2px;
-  border-radius: 99px;
+  filter: drop-shadow(0 6px 10px rgba(31, 13, 48, 0.2));
+}
+
+.resize-handle::before {
+  right: 11px;
+  bottom: 14px;
+  width: 24px;
+  height: 8px;
+  border-radius: 999px;
   background: #ec6d20;
-  transform: rotate(-45deg);
+  transform: rotate(45deg);
 }
 
 .resize-handle::after {
-  right: 8px;
-  bottom: 14px;
-  width: 8px;
+  right: 4px;
+  bottom: 4px;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: 3px;
+  background: #ec6d20;
+  clip-path: polygon(0 100%, 100% 100%, 100% 0);
 }
 
 .mascot-shell.hover .resize-handle,
@@ -122,31 +127,32 @@ button {
 
 .bubble {
   position: absolute;
-  left: 7px;
-  top: 6px;
+  left: 10px;
+  top: 10px;
   right: auto;
   bottom: auto;
   z-index: 6;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  width: clamp(120px, 46vw, 154px);
-  min-height: 48px;
-  max-height: 66px;
+  gap: 6px;
+  width: clamp(194px, 54vw, 242px);
+  min-height: 82px;
+  max-height: 132px;
   overflow: visible;
-  padding: 6px 8px 7px;
-  border: 1px solid rgba(255, 189, 104, 0.62);
-  border-radius: 16px 16px 16px 7px;
-  color: #241323;
+  padding: 12px 13px 11px;
+  border: 1px solid rgba(195, 203, 216, 0.82);
+  border-radius: 14px;
+  color: #172033;
   background:
-    radial-gradient(circle at 22% 18%, rgba(255, 182, 84, 0.34), transparent 35%),
-    linear-gradient(145deg, rgba(255, 253, 240, 0.98), rgba(255, 239, 205, 0.97));
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(246, 248, 252, 0.9)),
+    rgba(255, 255, 255, 0.86);
   box-shadow:
-    0 10px 22px rgba(40, 20, 45, 0.16),
-    0 0 0 1px rgba(255, 255, 255, 0.66) inset,
-    0 0 22px rgba(255, 137, 37, 0.22);
+    0 18px 38px rgba(20, 24, 35, 0.18),
+    0 0 0 1px rgba(255, 255, 255, 0.72) inset,
+    0 10px 30px rgba(0, 122, 255, 0.08);
   transform-origin: 94% 100%;
-  animation: bubbleTalkIn 320ms cubic-bezier(0.22, 1.18, 0.26, 1);
+  animation: bubbleTalkIn 220ms cubic-bezier(0.2, 0.9, 0.24, 1);
+  backdrop-filter: blur(18px) saturate(1.2);
   -webkit-app-region: no-drag;
 }
 
@@ -154,33 +160,35 @@ button {
   display: none !important;
 }
 
+.bubble:not(.idle-bubble) {
+  cursor: pointer;
+}
+
 .bubble::before {
   content: "";
   position: absolute;
-  inset: -1px;
+  inset: 0 auto 0 0;
   z-index: 0;
-  border-radius: inherit;
-  background: linear-gradient(120deg, rgba(255, 126, 31, 0.72), rgba(255, 229, 151, 0.46), rgba(108, 214, 255, 0.36));
-  opacity: 0.42;
-  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  padding: 1px;
+  width: 3px;
+  border-radius: 14px 0 0 14px;
+  background: linear-gradient(180deg, #007aff, #64d2ff);
+  opacity: 0.9;
   pointer-events: none;
 }
 
 .bubble::after {
   content: "";
   position: absolute;
-  right: 14px;
-  bottom: -5px;
+  right: 20px;
+  bottom: -6px;
   top: auto;
-  width: 10px;
-  height: 10px;
-  transform: rotate(45deg) skew(-4deg, -4deg);
-  background: rgba(255, 246, 224, 0.98);
-  border-right: 1px solid rgba(255, 189, 104, 0.46);
-  border-bottom: 1px solid rgba(255, 189, 104, 0.46);
-  box-shadow: 6px 6px 14px rgba(22, 14, 32, 0.08);
+  width: 12px;
+  height: 12px;
+  transform: rotate(45deg);
+  background: rgba(246, 248, 252, 0.94);
+  border-right: 1px solid rgba(195, 203, 216, 0.58);
+  border-bottom: 1px solid rgba(195, 203, 216, 0.58);
+  box-shadow: 6px 6px 14px rgba(20, 24, 35, 0.08);
 }
 
 .alert-mark {
@@ -211,20 +219,19 @@ button {
 }
 
 .alert-copy small {
-  min-height: 8px;
-  color: #9a4c12;
-  font-size: 8px;
+  min-height: 12px;
+  color: #5d6676;
+  font-size: 10px;
   font-weight: 900;
   letter-spacing: 0;
-  line-height: 1.15;
-  text-transform: uppercase;
+  line-height: 1.2;
 }
 
 .alert-copy strong {
-  margin-top: 1px;
-  color: #1f1324;
-  font-size: 12px;
-  line-height: 1.12;
+  margin-top: 2px;
+  color: #111827;
+  font-size: 15px;
+  line-height: 1.24;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -233,10 +240,10 @@ button {
 
 .alert-copy span {
   display: block;
-  margin-top: 2px;
-  color: #5a4b59;
-  font-size: 10px;
-  line-height: 1.14;
+  margin-top: 4px;
+  color: #5f6b7a;
+  font-size: 12px;
+  line-height: 1.3;
   overflow: hidden;
   overflow-wrap: normal;
   word-break: normal;
@@ -248,16 +255,16 @@ button {
   position: relative;
   z-index: 1;
   align-self: flex-end;
-  min-height: 20px;
-  padding: 2px 7px 3px;
-  border: 0;
-  border-radius: 999px;
+  min-height: 26px;
+  padding: 5px 10px;
+  border: 1px solid rgba(0, 122, 255, 0.24);
+  border-radius: 7px;
   color: #fff;
-  background: linear-gradient(135deg, #ff7b22, #ec4f1b);
-  font-size: 9px;
+  background: linear-gradient(180deg, #0a84ff, #0071e3);
+  font-size: 11px;
   font-weight: 800;
   cursor: pointer;
-  box-shadow: 0 7px 14px rgba(239, 92, 28, 0.24);
+  box-shadow: 0 8px 18px rgba(0, 122, 255, 0.22);
 }
 
 .bubble-actions {
@@ -265,41 +272,50 @@ button {
   z-index: 1;
   display: flex;
   justify-content: flex-end;
-  gap: 4px;
+  gap: 6px;
   min-width: 0;
 }
 
+.bubble-actions[hidden] {
+  display: none !important;
+}
+
 .bubble-actions button:first-child {
-  color: #7f3a09;
-  background: rgba(255, 229, 192, 0.86);
-  box-shadow: inset 0 0 0 1px rgba(255, 153, 54, 0.22);
+  color: #303847;
+  border-color: rgba(140, 148, 160, 0.28);
+  background: rgba(238, 241, 246, 0.92);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.55);
 }
 
 .bubble button:hover {
-  background: #d96516;
+  background: #0067d8;
 }
 
 .bubble-actions button:first-child:hover {
-  background: rgba(255, 212, 146, 0.96);
+  background: rgba(225, 230, 238, 0.98);
 }
 
 .mascot-shell.reminding .bubble {
-  animation: bubbleTalkIn 320ms cubic-bezier(0.22, 1.18, 0.26, 1), bubbleTalkPulse 1.9s ease-in-out infinite 320ms;
+  animation: bubbleTalkIn 220ms cubic-bezier(0.2, 0.9, 0.24, 1), bubbleTalkPulse 2.4s ease-in-out infinite 260ms;
+}
+
+.mascot-shell.timeblock-start-reminder .bubble::before {
+  background: linear-gradient(180deg, #32d74b, #64d2ff);
 }
 
 .bubble.idle-bubble {
   top: 8px;
   left: 8px;
   right: auto;
-  width: clamp(112px, 46vw, 142px);
+  width: clamp(142px, 48vw, 184px);
   min-height: 0;
-  height: 38px;
+  height: 46px;
   overflow: hidden;
-  padding: 6px 10px;
-  border-radius: 15px 15px 15px 7px;
-  background: rgba(255, 250, 238, 0.9);
-  box-shadow: 0 12px 28px rgba(22, 14, 32, 0.14), inset 0 0 0 1px rgba(255, 157, 68, 0.24);
-  backdrop-filter: blur(10px);
+  padding: 8px 11px;
+  border-radius: 12px;
+  background: rgba(250, 252, 255, 0.88);
+  box-shadow: 0 12px 28px rgba(20, 24, 35, 0.14), inset 0 0 0 1px rgba(183, 191, 204, 0.28);
+  backdrop-filter: blur(14px);
 }
 
 .bubble.idle-bubble::before,
@@ -383,6 +399,27 @@ button {
   transform: scale(calc(var(--mascot-scale) * var(--alert-zoom)));
   transform-origin: 50% 100%;
   transition: transform 200ms ease-out;
+  will-change: transform;
+}
+
+.mascot-shell.resizing .stage,
+.mascot-shell.dragging .stage {
+  transition: none;
+}
+
+.mascot-shell.resizing .mascot-layers,
+.mascot-shell.dragging .mascot-layers {
+  animation: none;
+  transform: translateX(-50%);
+}
+
+.mascot-shell.resizing .aura,
+.mascot-shell.dragging .aura,
+.mascot-shell.resizing .visor-glow,
+.mascot-shell.dragging .visor-glow,
+.mascot-shell.resizing .stars i,
+.mascot-shell.dragging .stars i {
+  animation-play-state: paused;
 }
 
 .aura {
@@ -476,10 +513,12 @@ button {
 
 .task-color-layer {
   z-index: 3;
-  clip-path: inset(var(--task-reveal-top) 0 0 0);
+  clip-path: inset(calc((1 - var(--task-progress, 0)) * 100%) 0 0 0);
   opacity: 0;
   pointer-events: none;
-  transition: clip-path 420ms ease, opacity 220ms ease;
+  transition:
+    clip-path 900ms cubic-bezier(0.18, 0.86, 0.26, 1),
+    opacity 260ms ease;
 }
 
 .task-color-layer img {
@@ -487,23 +526,41 @@ button {
 }
 
 .mascot-shell.time-block-active .body-layer img {
-  filter: grayscale(1) saturate(0.22) brightness(0.9);
+  filter: grayscale(1) saturate(0.16) brightness(0.92) contrast(1.02);
 }
 
-.mascot-shell.time-block-active .task-color-layer {
+.mascot-shell.time-block-active .task-color-layer,
+.mascot-shell.time-block-ending .task-color-layer {
   opacity: 1;
 }
 
-.mascot-shell.time-block-active .aura {
-  opacity: 0.24;
+.mascot-shell.time-block-active .mascot-layers::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
   background:
-    radial-gradient(circle at 50% 24%, rgba(255, 150, 42, 0.26), transparent 38%),
-    radial-gradient(circle at 44% 78%, rgba(0, 122, 255, 0.24), transparent 44%);
+    linear-gradient(to top,
+      rgba(255, 255, 255, 0) calc((var(--task-progress, 0) * 100%) - 1.5%),
+      rgba(255, 255, 255, 0.48) calc(var(--task-progress, 0) * 100%),
+      rgba(100, 210, 255, 0.18) calc((var(--task-progress, 0) * 100%) + 1.8%),
+      rgba(255, 255, 255, 0) calc((var(--task-progress, 0) * 100%) + 5%));
+  mix-blend-mode: screen;
+  opacity: 0.72;
+  mask-image: linear-gradient(to top, #000 0 calc(var(--task-progress, 0) * 100% + 8%), transparent calc(var(--task-progress, 0) * 100% + 18%));
 }
 
 .cape-layer,
 .head-layer {
   display: none;
+}
+
+.mascot-shell.time-block-active .aura {
+  opacity: 0.22;
+  background:
+    radial-gradient(circle at 50% 24%, rgba(50, 215, 75, 0.18), transparent 38%),
+    radial-gradient(circle at 44% 78%, rgba(100, 210, 255, 0.16), transparent 44%);
 }
 
 .visor-glow {
@@ -671,16 +728,16 @@ button {
   100% {
     transform: translateY(0) scale(1);
     box-shadow:
-      0 14px 30px rgba(40, 20, 45, 0.18),
-      0 0 0 1px rgba(255, 255, 255, 0.66) inset,
-      0 0 22px rgba(255, 137, 37, 0.22);
+      0 18px 38px rgba(20, 24, 35, 0.18),
+      0 0 0 1px rgba(255, 255, 255, 0.72) inset,
+      0 10px 30px rgba(0, 122, 255, 0.08);
   }
   50% {
-    transform: translateY(-1px) scale(1.018);
+    transform: translateY(-1px) scale(1.01);
     box-shadow:
-      0 18px 34px rgba(40, 20, 45, 0.22),
-      0 0 0 1px rgba(255, 255, 255, 0.72) inset,
-      0 0 30px rgba(255, 137, 37, 0.34);
+      0 22px 44px rgba(20, 24, 35, 0.22),
+      0 0 0 1px rgba(255, 255, 255, 0.78) inset,
+      0 12px 34px rgba(0, 122, 255, 0.12);
   }
 }
 

@@ -3,8 +3,8 @@ const bubble = document.querySelector("#bubble");
 const bubbleSource = document.querySelector("#bubbleSource");
 const bubbleTitle = document.querySelector("#bubbleTitle");
 const bubbleBody = document.querySelector("#bubbleBody");
-const bubbleAckBtn = document.querySelector("#bubbleAckBtn");
 const bubbleSnoozeBtn = document.querySelector("#bubbleSnoozeBtn");
+const bubbleActions = document.querySelector(".bubble-actions");
 const openSettingsBtn = document.querySelector("#openSettingsBtn");
 const justNowBtn = document.querySelector("#justNowBtn");
 const pauseBtn = document.querySelector("#pauseBtn");
@@ -16,6 +16,8 @@ const resizeHandle = document.querySelector("#resizeHandle");
 const mascotImages = Array.from(document.querySelectorAll(".mascot-img, .mascot-color-img"));
 
 const LISTENING_FALLBACK_STOP_MS = 4000;
+const MIN_MASCOT_SCALE = 0.7;
+const MAX_MASCOT_SCALE = 1.45;
 
 let settings = { paused: false };
 let bubbleIsReminder = false;
@@ -31,7 +33,10 @@ let listeningStopTimer = null;
 let listeningFrameIndex = 0;
 let listeningFrameDirection = 1;
 let mascotPointer = null;
+let dragPreviewFrame = 0;
+let pendingDragPoint = null;
 let resizePointer = null;
+let resizePreviewFrame = 0;
 let mousePassthrough = null;
 let bubbleInteractive = null;
 let activeTimeBlock = null;
@@ -201,6 +206,30 @@ function setMascotFrame(src) {
   });
 }
 
+function mascotScale() {
+  const scale = Number(settings.mascotScale);
+  return Number.isFinite(scale) ? clamp(scale, MIN_MASCOT_SCALE, MAX_MASCOT_SCALE) : 1;
+}
+
+function previewMascotScale(scale) {
+  const nextScale = clamp(Number(scale) || 1, MIN_MASCOT_SCALE, MAX_MASCOT_SCALE);
+  cancelAnimationFrame(resizePreviewFrame);
+  resizePreviewFrame = requestAnimationFrame(() => {
+    shell.style.setProperty("--mascot-scale", String(nextScale));
+  });
+}
+
+function queueMascotDrag(point) {
+  pendingDragPoint = point;
+  if (dragPreviewFrame) return;
+  dragPreviewFrame = requestAnimationFrame(() => {
+    dragPreviewFrame = 0;
+    if (!pendingDragPoint) return;
+    window.xiaoli.send("mascot:dragMove", pendingDragPoint);
+    pendingDragPoint = null;
+  });
+}
+
 function rectContains(rect, x, y, padding = 0) {
   if (!rect || rect.width <= 0 || rect.height <= 0) return false;
   return x >= rect.left - padding
@@ -215,13 +244,32 @@ function elementVisible(element) {
   return styles.display !== "none" && styles.visibility !== "hidden" && styles.pointerEvents !== "none";
 }
 
+function pointInMascotVisualShape(x, y) {
+  const rect = mascotLayers.getBoundingClientRect();
+  if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+  const localX = (x - rect.left) / rect.width;
+  const localY = (y - rect.top) / rect.height;
+  if (localX < 0 || localX > 1 || localY < 0 || localY > 1) return false;
+  return [
+    { left: 0.07, top: 0.01, right: 0.93, bottom: 0.42 },
+    { left: 0, top: 0.35, right: 1, bottom: 0.92 },
+    { left: 0.17, top: 0.86, right: 0.83, bottom: 1 }
+  ].some((zone) => (
+    localX >= zone.left
+      && localX <= zone.right
+      && localY >= zone.top
+      && localY <= zone.bottom
+  ));
+}
+
 function isInteractivePoint(event) {
   const { clientX, clientY } = event;
-  if (event.target?.closest?.("button")) return true;
-  if (elementVisible(bubble) && rectContains(bubble.getBoundingClientRect(), clientX, clientY, 8)) return true;
+  const buttonTarget = event.target?.closest?.("button");
+  if (buttonTarget && buttonTarget !== mascotHitArea) return true;
+  if (bubbleInteractive && elementVisible(bubble) && rectContains(bubble.getBoundingClientRect(), clientX, clientY, 8)) return true;
   if (elementVisible(quickActions) && rectContains(quickActions.getBoundingClientRect(), clientX, clientY, 8)) return true;
   if (elementVisible(resizeHandle) && rectContains(resizeHandle.getBoundingClientRect(), clientX, clientY, 12)) return true;
-  return rectContains(mascotLayers.getBoundingClientRect(), clientX, clientY, 14);
+  return pointInMascotVisualShape(clientX, clientY);
 }
 
 function setMousePassthrough(ignore) {
@@ -397,10 +445,11 @@ function renderIdleBubble() {
   activeReminder = null;
   setBubbleInteractive(false);
   stopReminderFrames();
-  shell.classList.remove("reminding");
+  shell.classList.remove("reminding", "timeblock-start-reminder");
   bubble.classList.add("idle-bubble");
-  bubbleAckBtn.hidden = true;
   bubbleSnoozeBtn.hidden = true;
+  bubbleActions.hidden = true;
+  bubble.removeAttribute("title");
   if (!settings.notificationBarPinned) {
     bubble.hidden = true;
     return;
@@ -422,8 +471,9 @@ function renderStatusBubble(source, title, body = "", autoHideMs = 0) {
   if (bubbleIsReminder) return;
   clearTimeout(statusBubbleTimer);
   bubble.classList.add("idle-bubble");
-  bubbleAckBtn.hidden = true;
   bubbleSnoozeBtn.hidden = true;
+  bubbleActions.hidden = true;
+  bubble.removeAttribute("title");
   bubbleSource.textContent = source;
   bubbleTitle.textContent = title;
   bubbleBody.textContent = body;
@@ -438,29 +488,52 @@ function showBubble(payload = {}) {
   activeReminder = payload;
   setBubbleInteractive(true);
   bubble.classList.remove("idle-bubble");
-  const compactTitleLength = window.innerWidth <= 520 ? 8 : 14;
-  const compactBodyLength = window.innerWidth <= 520 ? 6 : 14;
-  bubbleSource.textContent = payload.sourceLabel ? `来自 ${payload.sourceLabel}` : "AI小力";
+  const isTimeBlockStart = payload.kind === "timeBlock";
+  const compactTitleLength = window.innerWidth <= 520 ? 14 : 20;
+  const compactBodyLength = window.innerWidth <= 520 ? 18 : 28;
+  bubbleSource.textContent = isTimeBlockStart
+    ? "时间块开始"
+    : (payload.sourceLabel ? `来自 ${payload.sourceLabel}` : "AI小力");
   bubbleTitle.textContent = compactText(payload.title || "提醒", compactTitleLength);
-  bubbleBody.textContent = compactText(payload.body || "时间到了。", compactBodyLength);
-  bubbleAckBtn.hidden = false;
-  bubbleSnoozeBtn.hidden = !payload.id || payload.id === "test";
+  bubbleBody.textContent = compactText(payload.body || (isTimeBlockStart ? "任务开始了。" : "时间到了。"), compactBodyLength);
+  bubbleSnoozeBtn.hidden = isTimeBlockStart || !payload.id || payload.id === "test";
+  bubbleActions.hidden = bubbleSnoozeBtn.hidden;
+  bubble.title = "点击关闭提醒";
   bubble.hidden = false;
-  shell.classList.add("reminding");
-  startReminderFrames();
+  shell.classList.toggle("timeblock-start-reminder", isTimeBlockStart);
+  if (isTimeBlockStart) {
+    shell.classList.remove("reminding");
+    stopReminderFrames();
+  } else {
+    shell.classList.add("reminding");
+    startReminderFrames();
+  }
+}
+
+function triggerTaskRingDissolve() {
+  shell.classList.remove("time-block-active");
+  shell.style.setProperty("--task-progress", "1");
+  shell.classList.add("time-block-ending");
+  setTimeout(() => shell.classList.remove("time-block-ending"), 900);
 }
 
 function applyTimeBlockState(payload = {}) {
+  const hadActiveTimeBlock = Boolean(activeTimeBlock);
   activeTimeBlock = payload?.active ? payload : null;
   clearInterval(timeBlockTimer);
   if (activeTimeBlock) {
     timeBlockTimer = setInterval(updateTimeBlockProgress, 10000);
+  } else if (hadActiveTimeBlock) {
+    triggerTaskRingDissolve();
+    if (!bubbleIsReminder) renderIdleBubble();
+    return;
   }
   updateTimeBlockProgress();
 }
 
 function updateTimeBlockProgress() {
   let progress = Math.min(Math.max(Number(activeTimeBlock?.progress || 0), 0), 1);
+  let justFinished = false;
   if (activeTimeBlock?.startAt && activeTimeBlock?.endAt) {
     const startMs = new Date(activeTimeBlock.startAt).getTime();
     const endMs = new Date(activeTimeBlock.endAt).getTime();
@@ -469,12 +542,16 @@ function updateTimeBlockProgress() {
       activeTimeBlock.progress = progress;
       if (progress >= 1) {
         activeTimeBlock = null;
+        justFinished = true;
         clearInterval(timeBlockTimer);
       }
     }
   }
   shell.classList.toggle("time-block-active", Boolean(activeTimeBlock));
-  shell.style.setProperty("--task-reveal-top", `${Math.round((1 - progress) * 100)}%`);
+  shell.style.setProperty("--task-progress", String(progress));
+  if (justFinished) {
+    triggerTaskRingDissolve();
+  }
   if (!bubbleIsReminder) renderIdleBubble();
 }
 
@@ -556,7 +633,10 @@ bindPress(bubbleSnoozeBtn, async () => {
   }
 });
 
-bindPress(bubbleAckBtn, () => {
+bubble.addEventListener("click", (event) => {
+  if (!bubbleIsReminder || event.target?.closest?.("button")) return;
+  event.preventDefault();
+  event.stopPropagation();
   renderIdleBubble();
 });
 
@@ -567,13 +647,21 @@ resizeHandle.addEventListener("pointerdown", (event) => {
   setMousePassthrough(false);
   shell.classList.add("hover", "resizing");
   resizeHandle.setPointerCapture(event.pointerId);
-  resizePointer = { pointerId: event.pointerId };
+  resizePointer = {
+    pointerId: event.pointerId,
+    startScreenX: Number.isFinite(event.screenX) ? event.screenX : event.clientX + window.screenX,
+    startScreenY: Number.isFinite(event.screenY) ? event.screenY : event.clientY + window.screenY,
+    startScale: mascotScale()
+  };
   window.xiaoli.send("mascot:resizeStart", pointerScreenPoint(event));
 });
 
 resizeHandle.addEventListener("pointermove", (event) => {
   if (!resizePointer || resizePointer.pointerId !== event.pointerId) return;
   event.preventDefault();
+  const point = pointerScreenPoint(event);
+  const delta = Math.max(point.x - resizePointer.startScreenX, point.y - resizePointer.startScreenY);
+  previewMascotScale(resizePointer.startScale + delta / 360);
   window.xiaoli.send("mascot:resizeMove", pointerScreenPoint(event));
 });
 
@@ -630,7 +718,7 @@ mascotHitArea.addEventListener("pointermove", (event) => {
   }
   if (mascotPointer.moved) {
     event.preventDefault();
-    window.xiaoli.send("mascot:dragMove", pointerScreenPoint(event));
+    queueMascotDrag(pointerScreenPoint(event));
   }
 });
 
@@ -638,12 +726,25 @@ function finishMascotPointer(event) {
   if (!mascotPointer || mascotPointer.pointerId !== event.pointerId) return;
   const wasClick = !mascotPointer.moved;
   mascotPointer = null;
+  cancelAnimationFrame(dragPreviewFrame);
+  dragPreviewFrame = 0;
+  if (pendingDragPoint) {
+    window.xiaoli.send("mascot:dragMove", pendingDragPoint);
+    pendingDragPoint = null;
+  }
   shell.classList.remove("dragging");
   if (mascotHitArea.hasPointerCapture(event.pointerId)) {
     mascotHitArea.releasePointerCapture(event.pointerId);
   }
   window.xiaoli.send("mascot:dragEnd");
-  if (wasClick) startListeningFrames();
+  if (wasClick) {
+    startListeningFrames();
+  } else {
+    window.xiaoli?.send?.("activity:record", {
+      type: "mascot.drag",
+      title: "拖动小力位置"
+    });
+  }
 }
 
 mascotHitArea.addEventListener("pointerup", finishMascotPointer);
@@ -670,7 +771,12 @@ shell.addEventListener("mousemove", (event) => {
 });
 
 window.addEventListener("blur", () => {
+  cancelAnimationFrame(dragPreviewFrame);
+  dragPreviewFrame = 0;
+  pendingDragPoint = null;
+  if (resizePointer) window.xiaoli.send("mascot:resizeEnd");
   resizePointer = null;
+  cancelAnimationFrame(resizePreviewFrame);
   shell.classList.remove("resizing");
   setMousePassthrough(true);
 });

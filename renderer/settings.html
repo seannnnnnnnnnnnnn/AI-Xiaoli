@@ -71,7 +71,10 @@
             <p id="listEyebrow" class="eyebrow">智能列表</p>
             <h2 id="listTitle">今天</h2>
           </div>
-          <button id="newReminderBtn" class="primary-button" type="button">新建提醒</button>
+          <div class="toolbar-actions">
+            <button id="directArrangeBtn" class="ghost-button" type="button">直接安排</button>
+            <button id="newReminderBtn" class="primary-button" type="button">新建提醒</button>
+          </div>
         </header>
 
         <div class="summary-strip">
@@ -107,6 +110,22 @@
             <button class="ghost-button" id="resetFormBtn" type="button" hidden>取消</button>
           </div>
 
+          <section id="directArrangePanel" class="direct-arrange-panel" hidden>
+            <div class="direct-arrange-head">
+              <div>
+                <strong>直接安排</strong>
+                <span>历史动作、单点提醒、时间块</span>
+              </div>
+              <button id="closeArrangeBtn" class="ghost-button" type="button">收起</button>
+            </div>
+            <textarea id="directArrangeInput" rows="4" maxlength="800" placeholder="例：刚刚半个小时我忙着统计5月新媒体数据了，未来一小时我要继续产出小红书官号内容。"></textarea>
+            <div class="button-row">
+              <button id="previewArrangeBtn" class="primary-button" type="button">生成安排</button>
+              <button id="commitArrangeBtn" class="ghost-button" type="button" disabled>应用安排</button>
+            </div>
+            <div id="arrangePreview" class="arrange-preview" hidden></div>
+          </section>
+
           <form id="reminderForm" class="detail-form">
             <div class="reminder-kind-segment" aria-label="提醒类型">
               <label>
@@ -126,9 +145,23 @@
               备注
               <textarea id="bodyInput" rows="5" maxlength="400" placeholder="写下具体要做什么，小力提醒时会显示。"></textarea>
             </label>
+            <section id="timeBlockTimeline" class="time-block-timeline" hidden>
+              <div class="timeline-head">
+                <span id="timelineDateLabel">今天</span>
+                <strong id="timelineRangeLabel">10:00-11:00</strong>
+              </div>
+              <div id="timelineScroll" class="timeline-scroll">
+                <div id="timelineCanvas" class="timeline-canvas" role="slider" aria-label="拖动选择时间块" tabindex="0">
+                  <div id="timelineHours" class="timeline-hours"></div>
+                  <div id="timelineSelection" class="timeline-selection">
+                    <span id="timelineSelectionText">10:00-11:00</span>
+                  </div>
+                </div>
+              </div>
+            </section>
             <div class="field-grid">
               <label>
-                开始时间
+                <span id="dueTimeLabel">提醒时间</span>
                 <input id="dueInput" type="datetime-local" required />
               </label>
               <label id="endTimeField" hidden>

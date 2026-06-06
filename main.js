@@ -20,7 +20,7 @@ const APP_SUBTITLE = "桌面 AI 任务助手";
 const LEGACY_APP_NAME = "AI小力桌宠";
 const APP_LOGO_PATH = path.join(__dirname, "assets", "app-logo.png");
 const REMINDER_POLL_MS = 15000;
-const MASCOT_INTERACTION_POLL_MS = 50;
+const MASCOT_INTERACTION_POLL_MS = 30;
 const ACTIVITY_POLL_MS = 30000;
 const DEFAULT_SNOOZE_MINUTES = 10;
 const MASCOT_SIZE = { width: 480, height: 680 };
@@ -29,8 +29,11 @@ const MAX_MASCOT_SCALE = 1.45;
 const DEFAULT_TIME_BLOCK_MINUTES = 60;
 const SETTINGS_SIZE = { width: 1160, height: 820 };
 const SUMMARY_HISTORY_LIMIT = 60;
+const TRAY_IDLE_TITLE = "小力";
+const TRAY_TASK_TITLE_MAX_LENGTH = 36;
 const VALID_REPEATS = new Set(["none", "daily", "weekly", "monthly"]);
 const VALID_REMINDER_KINDS = new Set(["instant", "timeBlock"]);
+const VALID_ARRANGE_ACTIONS = new Set(["history", "instant", "timeBlock"]);
 const FUTURE_DUE_GRACE_MS = 1000;
 const JUST_NOW_START_TIMEOUT_MS = 12000;
 const JUST_NOW_STOP_TIMEOUT_MS = 150000;
@@ -60,6 +63,7 @@ const DEFAULT_JUST_NOW_TEMPLATE = [
 let mascotWindow = null;
 let settingsWindow = null;
 let tray = null;
+let trayTitleText = "";
 let reminderTimer = null;
 let checkingReminders = false;
 let saveBoundsTimer = null;
@@ -68,6 +72,7 @@ let mousePassthroughEnabled = null;
 let mascotDragState = null;
 let mascotResizeState = null;
 let mascotBubbleInteractive = false;
+let mascotControlsExpanded = false;
 let activityTimer = null;
 let currentForeground = null;
 let lastForegroundErrorAt = 0;
@@ -1343,6 +1348,33 @@ function resizeMascotWindowForScale(nextScale, preserveBottomRight = true) {
   settings.mascotBounds = nextBounds;
 }
 
+function flushMascotResizePreview() {
+  if (!mascotResizeState) return;
+  if (mascotResizeState.timer) {
+    clearTimeout(mascotResizeState.timer);
+    mascotResizeState.timer = null;
+  }
+  const nextScale = normalizedScale(mascotResizeState.pendingScale ?? mascotResizeState.startScale);
+  settings.mascotScale = nextScale;
+  resizeMascotWindowForScale(nextScale, false);
+}
+
+function flushMascotDragPreview() {
+  if (!mascotWindow || mascotWindow.isDestroyed() || !mascotDragState?.pendingPoint) return;
+  if (mascotDragState.timer) {
+    clearTimeout(mascotDragState.timer);
+    mascotDragState.timer = null;
+  }
+  const point = mascotDragState.pendingPoint;
+  const dx = Math.round(point.x - mascotDragState.startPoint.x);
+  const dy = Math.round(point.y - mascotDragState.startPoint.y);
+  mascotWindow.setPosition(
+    mascotDragState.startBounds.x + dx,
+    mascotDragState.startBounds.y + dy,
+    false
+  );
+}
+
 function setMascotMousePassthrough(ignore) {
   if (!mascotWindow || mascotWindow.isDestroyed()) return;
   const next = Boolean(ignore);
@@ -1359,34 +1391,103 @@ function pointInRect(point, rect) {
     && point.y <= rect.y + rect.height;
 }
 
-function mascotInteractiveRegion() {
-  if (!mascotWindow || mascotWindow.isDestroyed()) return [];
+function clampMascotRect(rect, bounds) {
+  const x = Math.max(0, Math.round(rect.x));
+  const y = Math.max(0, Math.round(rect.y));
+  const right = Math.min(bounds.width, Math.round(rect.x + rect.width));
+  const bottom = Math.min(bounds.height, Math.round(rect.y + rect.height));
+  const width = right - x;
+  const height = bottom - y;
+  return width > 0 && height > 0 ? { x, y, width, height } : null;
+}
+
+function mascotRegionLayout() {
+  if (!mascotWindow || mascotWindow.isDestroyed()) {
+    return { bodyRegions: [], controls: [], bubble: [] };
+  }
   const bounds = mascotWindow.getBounds();
   const scale = normalizedScale(settings.mascotScale);
-  const regions = [];
-  if (mascotBubbleInteractive) {
-    regions.push({
-      x: 0,
-      y: 0,
-      width: Math.min(bounds.width, 220),
-      height: Math.min(bounds.height, 120)
-    });
-  }
-  const bodyWidth = Math.min(bounds.width * 0.88, 276 * scale * 1.42);
-  const bodyHeight = Math.min(bounds.height * 0.78, 365 * scale * 1.42);
-  const bodyBottom = bounds.height - Math.max(8, 8 * scale);
-  const bodyLeft = (bounds.width - bodyWidth) / 2;
-  const bodyTop = Math.max(0, bodyBottom - bodyHeight);
-  const actionSize = 132 * scale;
-  const actionLeft = (bounds.width / 2) + (82 * scale);
-  const actionTop = bodyTop + (54 * scale);
-  const resizeSize = 74 * scale;
-  regions.push(
-    { x: bodyLeft, y: bodyTop, width: bodyWidth, height: bodyHeight },
-    { x: actionLeft - 12, y: actionTop - 12, width: actionSize, height: actionSize },
-    { x: bounds.width - resizeSize - 12, y: bounds.height - resizeSize - 12, width: resizeSize + 16, height: resizeSize + 16 }
-  );
+  const alertZoom = activeReminderPayload && activeReminderPayload.kind !== "timeBlock" ? 1.4 : 1;
+  const transformScale = scale * alertZoom;
+  const centerX = bounds.width / 2;
+  const stageBottom = bounds.height - 8;
+  const bodyTop = stageBottom - 385 * transformScale;
+
+  const region = (rect) => clampMascotRect(rect, bounds);
+  const bodyRegions = [
+    region({
+      x: centerX - 118 * transformScale,
+      y: bodyTop + 4 * transformScale,
+      width: 236 * transformScale,
+      height: 148 * transformScale
+    }),
+    region({
+      x: centerX - 138 * transformScale,
+      y: bodyTop + 126 * transformScale,
+      width: 276 * transformScale,
+      height: 210 * transformScale
+    }),
+    region({
+      x: centerX - 92 * transformScale,
+      y: bodyTop + 315 * transformScale,
+      width: 184 * transformScale,
+      height: 52 * transformScale
+    })
+  ].filter(Boolean);
+
+  const controls = [
+    region({
+      x: centerX + 84 * transformScale,
+      y: stageBottom - 338 * transformScale,
+      width: 144 * transformScale,
+      height: 60 * transformScale
+    }),
+    region({
+      x: centerX + 104 * transformScale,
+      y: stageBottom - 66 * transformScale,
+      width: 66 * transformScale,
+      height: 66 * transformScale
+    })
+  ].filter(Boolean);
+
+  const bubble = mascotBubbleInteractive
+    ? region({
+        x: 0,
+        y: 0,
+        width: Math.min(bounds.width, 278),
+        height: Math.min(bounds.height, 154)
+      })
+    : null;
+
+  return {
+    bodyRegions,
+    controls,
+    bubble: bubble ? [bubble] : []
+  };
+}
+
+function mascotInteractiveRegion(expanded = false) {
+  const layout = mascotRegionLayout();
+  const regions = [
+    ...layout.bubble,
+    ...layout.bodyRegions
+  ];
+  const controlsVisible = !activeReminderPayload
+    || activeReminderPayload.kind === "timeBlock"
+    || Boolean(nativeJustNowSession);
+  if (expanded && controlsVisible) regions.push(...layout.controls);
   return regions;
+}
+
+function mascotCollapsedInteractiveRegion() {
+  const layout = mascotRegionLayout();
+  if (mascotBubbleInteractive) {
+    return [
+      ...layout.bubble,
+      ...layout.bodyRegions
+    ];
+  }
+  return layout.bodyRegions;
 }
 
 function updateMascotMousePassthroughFromCursor() {
@@ -1398,6 +1499,7 @@ function updateMascotMousePassthroughFromCursor() {
   const bounds = mascotWindow.getBounds();
   const cursor = screen.getCursorScreenPoint();
   if (!pointInRect(cursor, bounds)) {
+    mascotControlsExpanded = false;
     setMascotMousePassthrough(true);
     return;
   }
@@ -1405,7 +1507,12 @@ function updateMascotMousePassthroughFromCursor() {
     x: cursor.x - bounds.x,
     y: cursor.y - bounds.y
   };
-  const overInteractiveRegion = mascotInteractiveRegion().some((rect) => pointInRect(localPoint, rect));
+  const overCollapsedRegion = mascotCollapsedInteractiveRegion().some((rect) => pointInRect(localPoint, rect));
+  if (overCollapsedRegion) mascotControlsExpanded = true;
+  const shouldExposeControls = mascotControlsExpanded || Boolean(nativeJustNowSession);
+  const overInteractiveRegion = mascotInteractiveRegion(shouldExposeControls)
+    .some((rect) => pointInRect(localPoint, rect));
+  if (!overInteractiveRegion) mascotControlsExpanded = false;
   setMascotMousePassthrough(!overInteractiveRegion);
 }
 
@@ -1583,9 +1690,12 @@ function createMascotWindow() {
   mascotWindow.on("closed", () => {
     stopMascotMousePoll();
     mousePassthroughEnabled = null;
+    if (mascotDragState?.timer) clearTimeout(mascotDragState.timer);
     mascotDragState = null;
+    if (mascotResizeState?.timer) clearTimeout(mascotResizeState.timer);
     mascotResizeState = null;
     mascotBubbleInteractive = false;
+    mascotControlsExpanded = false;
     mascotWindow = null;
   });
 
@@ -1677,10 +1787,26 @@ function trayImage() {
   return nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`);
 }
 
+function compactTrayTaskTitle(value) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (text.length <= TRAY_TASK_TITLE_MAX_LENGTH) return text;
+  return `${text.slice(0, TRAY_TASK_TITLE_MAX_LENGTH - 1)}…`;
+}
+
+function updateTrayTaskTitle(timeBlockState = currentTimeBlockState()) {
+  if (!tray || process.platform !== "darwin") return;
+  const taskTitle = timeBlockState?.active ? compactTrayTaskTitle(timeBlockState.title || "当前任务") : "";
+  const nextTitle = taskTitle ? `${TRAY_IDLE_TITLE}｜${taskTitle}` : TRAY_IDLE_TITLE;
+  if (trayTitleText !== nextTitle) {
+    tray.setTitle(nextTitle);
+    trayTitleText = nextTitle;
+  }
+  tray.setToolTip(taskTitle ? `${APP_NAME} · 当前任务：${taskTitle}` : `${APP_NAME} · ${APP_SUBTITLE}`);
+}
+
 function createTray() {
   tray = new Tray(trayImage().resize({ width: 18, height: 18 }));
-  if (process.platform === "darwin") tray.setTitle("小力");
-  tray.setToolTip(`${APP_NAME} · ${APP_SUBTITLE}`);
+  updateTrayTaskTitle();
   tray.on("click", () => createSettingsWindow());
   updateTrayMenu();
 }
@@ -1859,8 +1985,10 @@ function currentTimeBlockState(nowMs = Date.now()) {
 }
 
 function sendCurrentTimeBlockState() {
+  const state = currentTimeBlockState();
+  updateTrayTaskTitle(state);
   if (mascotWindow && !mascotWindow.isDestroyed()) {
-    mascotWindow.webContents.send("mascot:timeBlock", currentTimeBlockState());
+    mascotWindow.webContents.send("mascot:timeBlock", state);
   }
 }
 
@@ -2053,10 +2181,12 @@ function compactActivityEvent(event) {
           endAt: String(event.meta.endAt || "").slice(0, 40),
           endAtLocal: formatLocalDateTime(event.meta.endAt, { seconds: true }) || undefined,
           repeat: String(event.meta.repeat || "").slice(0, 20),
+          inputMode: String(event.meta.inputMode || "").slice(0, 40),
           minutes: Number.isFinite(Number(event.meta.minutes)) ? Number(event.meta.minutes) : undefined,
           snoozeCount: Number.isFinite(Number(event.meta.snoozeCount)) ? Number(event.meta.snoozeCount) : undefined,
           snoozeReturnDueAt: String(event.meta.snoozeReturnDueAt || "").slice(0, 40),
           snoozeReturnDueAtLocal: formatLocalDateTime(event.meta.snoozeReturnDueAt, { seconds: true }) || undefined,
+          scale: Number.isFinite(Number(event.meta.scale)) ? Number(event.meta.scale) : undefined,
           historyId: String(event.meta.historyId || "").slice(0, 80)
         }
       : undefined
@@ -2079,7 +2209,7 @@ function localActivitySummary({ label, events, stats }) {
   }).join("\n");
   return [
     `${label}本地统计：共记录 ${stats.totalEvents} 条活动。${appLine}`,
-    `提醒相关事件 ${reminderCount} 条，时间块结束 ${timeBlockEndCount} 条，拖延/稍后提醒 ${snoozeCount} 条；聆听/桌宠交互 ${stats.counts["mascot.listen"] || 0} 条。`,
+    `提醒相关事件 ${reminderCount} 条，时间块结束 ${timeBlockEndCount} 条，拖延/稍后提醒 ${snoozeCount} 条；聆听 ${stats.counts["mascot.listen"] || 0} 条，桌宠拖动/缩放 ${(stats.counts["mascot.drag"] || 0) + (stats.counts["mascot.resize"] || 0)} 条。`,
     "最近活动：",
     latest
   ].join("\n");
@@ -2162,6 +2292,230 @@ async function testAiConnection() {
     { role: "user", content: "请回复：小力已连接。" }
   ]);
   return { ok: true, message: content };
+}
+
+function parseJsonFromModelText(text) {
+  const raw = String(text || "").trim()
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```$/i, "")
+    .trim();
+  try {
+    return JSON.parse(raw);
+  } catch {}
+  const first = raw.indexOf("{");
+  const last = raw.lastIndexOf("}");
+  if (first >= 0 && last > first) {
+    return JSON.parse(raw.slice(first, last + 1));
+  }
+  throw new Error("LLM 没有返回有效的安排 JSON。");
+}
+
+function compactArrangeText(value, maxLength = 120) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return text.slice(0, maxLength);
+}
+
+function parseArrangeDate(value, label) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) throw new Error(`${label}时间无效。`);
+  return date;
+}
+
+function normalizeArrangePlan(plan = {}, input = {}) {
+  const nowMs = Date.now();
+  const originalText = compactArrangeText(input.originalText || plan.originalText || "", 1000);
+  const rawActions = Array.isArray(plan.actions) ? plan.actions : [];
+  if (!rawActions.length) throw new Error("没有识别到可执行的安排。");
+  const actions = rawActions.slice(0, 8).map((raw, index) => {
+    const type = String(raw?.type || "").trim();
+    if (!VALID_ARRANGE_ACTIONS.has(type)) throw new Error(`第 ${index + 1} 个动作类型无效。`);
+    const title = compactArrangeText(raw.title || raw.name || "", 80);
+    if (!title) throw new Error(`第 ${index + 1} 个动作缺少标题。`);
+    const base = {
+      id: String(raw.id || crypto.randomUUID()),
+      type,
+      title,
+      body: compactArrangeText(raw.body || raw.detail || "", 400),
+      sourceLabel: compactArrangeText(raw.sourceLabel || raw.source || "直接安排", 40) || "直接安排",
+      repeat: VALID_REPEATS.has(raw.repeat) ? raw.repeat : "none",
+      originalText
+    };
+    if (type === "history") {
+      const start = parseArrangeDate(raw.startAt, "历史动作开始");
+      const end = parseArrangeDate(raw.endAt, "历史动作结束");
+      if (end.getTime() <= start.getTime()) throw new Error(`历史动作“${title}”的结束时间必须晚于开始时间。`);
+      if (start.getTime() > nowMs + 60 * 1000 || end.getTime() > nowMs + 60 * 1000) {
+        throw new Error(`历史动作“${title}”不能晚于当前时间。`);
+      }
+      return {
+        ...base,
+        startAt: start.toISOString(),
+        endAt: end.toISOString(),
+        durationMs: end.getTime() - start.getTime(),
+        startAtLocal: formatLocalDateTime(start, { seconds: true }),
+        endAtLocal: formatLocalDateTime(end, { seconds: true })
+      };
+    }
+    if (type === "instant") {
+      const due = parseArrangeDate(raw.dueAt || raw.startAt, "单点提醒");
+      if (due.getTime() <= nowMs + FUTURE_DUE_GRACE_MS) throw new Error(`单点提醒“${title}”需要是未来时间。`);
+      return {
+        ...base,
+        dueAt: due.toISOString(),
+        startAt: due.toISOString(),
+        endAt: "",
+        dueAtLocal: formatLocalDateTime(due, { seconds: true })
+      };
+    }
+    const start = parseArrangeDate(raw.startAt || raw.dueAt, "时间块开始");
+    const end = parseArrangeDate(raw.endAt, "时间块结束");
+    if (end.getTime() <= start.getTime()) throw new Error(`时间块“${title}”的结束时间必须晚于开始时间。`);
+    if (end.getTime() <= nowMs + FUTURE_DUE_GRACE_MS) throw new Error(`时间块“${title}”的结束时间需要晚于当前时间。`);
+    if (end.getTime() - start.getTime() < 5 * 60 * 1000) throw new Error(`时间块“${title}”至少需要 5 分钟。`);
+    return {
+      ...base,
+      startAt: start.toISOString(),
+      dueAt: start.toISOString(),
+      endAt: end.toISOString(),
+      startAtLocal: formatLocalDateTime(start, { seconds: true }),
+      endAtLocal: formatLocalDateTime(end, { seconds: true })
+    };
+  });
+  return {
+    summary: compactArrangeText(plan.summary || "请确认下面的安排。", 160),
+    originalText,
+    createdAt: new Date().toISOString(),
+    actions
+  };
+}
+
+async function previewLanguageArrange(input = {}) {
+  const text = String(input.text || "").trim();
+  if (!text) throw new Error("请输入要安排的内容。");
+  const ai = normalizeAiSettings(settings.ai);
+  if (!ai.enabled) throw new Error("请先在 AI小力设置里启用通用 LLM API。");
+  const now = new Date();
+  const today = `${now.getFullYear()}-${padTimePart(now.getMonth() + 1)}-${padTimePart(now.getDate())}`;
+  const content = await callAiChat([
+    {
+      role: "system",
+      content: [
+        "你是 AI小力的自然语言任务安排解析器。",
+        "你的任务是把用户输入解析成可执行 JSON，不要执行，不要解释，不要输出 Markdown。",
+        "只能输出一个 JSON 对象，结构为：",
+        "{\"summary\":\"一句话概括\",\"actions\":[{\"type\":\"history|instant|timeBlock\",\"title\":\"标题\",\"body\":\"备注\",\"sourceLabel\":\"来源标签\",\"startAt\":\"ISO时间\",\"endAt\":\"ISO时间\",\"dueAt\":\"ISO时间\",\"repeat\":\"none\"}]}",
+        "三类动作含义：history=已经发生的历史动作；instant=未来单点提醒；timeBlock=未来开始-结束时间块。",
+        "用户没有规定日期时，默认日期必须是今天。",
+        "用户使用“刚刚/过去/前半小时/刚才”等描述时，创建 history，并根据当前时间倒推 startAt/endAt。",
+        "用户使用“未来/接下来/稍后/明天/下午/晚上”等安排未来工作区间时，创建 timeBlock。",
+        "用户只说某个时间点提醒时，创建 instant。",
+        "所有时间必须是可被 JavaScript Date 解析的 ISO 8601 字符串，尽量带本地时区偏移。",
+        "不要生成删除、修改或查询动作。无法确定时宁可少生成动作。"
+      ].join("\n")
+    },
+    {
+      role: "user",
+      content: [
+        `当前本地时间：${formatLocalDateTime(now, { seconds: true })}`,
+        `当前 ISO：${now.toISOString()}`,
+        `本机时区：${localTimeZoneLabel()}`,
+        `默认日期：${today}`,
+        "",
+        `用户输入：${text}`
+      ].join("\n")
+    }
+  ]);
+  const parsed = parseJsonFromModelText(content);
+  return normalizeArrangePlan(parsed, { originalText: text });
+}
+
+function commitLanguageArrange(input = {}) {
+  const plan = normalizeArrangePlan(input.plan || {}, { originalText: input.originalText || input.plan?.originalText || "" });
+  const nowIso = new Date().toISOString();
+  const created = {
+    history: [],
+    reminders: []
+  };
+  let remindersChanged = false;
+
+  for (const action of plan.actions) {
+    if (action.type === "history") {
+      const record = appendActivity({
+        ts: action.startAt,
+        type: "manual.history",
+        title: action.title,
+        source: action.sourceLabel || "直接安排",
+        detail: action.body,
+        startedAt: action.startAt,
+        endedAt: action.endAt,
+        durationMs: action.durationMs,
+        meta: {
+          inputMode: "language",
+          originalText: plan.originalText
+        }
+      });
+      created.history.push(record);
+      continue;
+    }
+    const reminder = normalizeReminderInput({
+      kind: action.type === "timeBlock" ? "timeBlock" : "instant",
+      title: action.title,
+      body: action.body,
+      dueAt: action.dueAt || action.startAt,
+      startAt: action.startAt || action.dueAt,
+      endAt: action.type === "timeBlock" ? action.endAt : "",
+      repeat: action.repeat || "none",
+      enabled: true,
+      sourceLabel: action.sourceLabel || "直接安排",
+      inputMode: "language"
+    });
+    reminders.push(reminder);
+    remindersChanged = true;
+    created.reminders.push(reminder);
+    appendActivity({
+      type: "reminder.create",
+      title: reminder.title,
+      source: reminder.sourceLabel || "提醒",
+      detail: reminder.body,
+      meta: {
+        kind: reminder.kind || "instant",
+        dueAt: reminder.dueAt,
+        startAt: reminder.startAt || reminder.dueAt,
+        endAt: reminder.endAt || "",
+        repeat: reminder.repeat,
+        inputMode: "language",
+        originalText: plan.originalText
+      }
+    });
+  }
+
+  appendActivity({
+    type: "language.arrange",
+    title: "直接安排",
+    source: APP_NAME,
+    detail: plan.originalText,
+    meta: {
+      historyCount: created.history.length,
+      reminderCount: created.reminders.length
+    }
+  });
+
+  if (remindersChanged) {
+    saveReminders();
+    broadcastReminders();
+  }
+
+  return {
+    ok: true,
+    committedAt: nowIso,
+    plan,
+    created: {
+      historyCount: created.history.length,
+      reminderCount: created.reminders.length,
+      reminders: created.reminders
+    }
+  };
 }
 
 async function summarizeActivities(input = {}) {
@@ -2450,12 +2804,17 @@ function installIpcHandlers() {
   ipcMain.on("activity:record", (event, payload = {}) => {
     if (!mascotWindow || event.sender !== mascotWindow.webContents) return;
     const type = String(payload.type || "");
-    if (!["mascot.listen", "mascot.drag"].includes(type)) return;
+    if (!["mascot.listen", "mascot.drag", "mascot.resize"].includes(type)) return;
     appendActivity({
       type,
       title: String(payload.title || "").slice(0, 120),
       source: APP_NAME,
-      detail: String(payload.detail || "").slice(0, 260)
+      detail: String(payload.detail || "").slice(0, 260),
+      meta: payload.meta && typeof payload.meta === "object"
+        ? {
+            scale: Number.isFinite(Number(payload.meta.scale)) ? Number(payload.meta.scale) : undefined
+          }
+        : undefined
     });
   });
   ipcMain.on("mascot:dragStart", (event, point = {}) => {
@@ -2465,7 +2824,9 @@ function installIpcHandlers() {
     if (!Number.isFinite(x) || !Number.isFinite(y)) return;
     mascotDragState = {
       startPoint: { x, y },
-      startBounds: mascotWindow.getBounds()
+      startBounds: mascotWindow.getBounds(),
+      pendingPoint: null,
+      timer: null
     };
     setMascotMousePassthrough(false);
   });
@@ -2474,17 +2835,18 @@ function installIpcHandlers() {
     const x = Number(point.x);
     const y = Number(point.y);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-    const dx = Math.round(x - mascotDragState.startPoint.x);
-    const dy = Math.round(y - mascotDragState.startPoint.y);
-    const nextBounds = {
-      ...mascotDragState.startBounds,
-      x: mascotDragState.startBounds.x + dx,
-      y: mascotDragState.startBounds.y + dy
-    };
-    mascotWindow.setBounds(nextBounds);
+    mascotDragState.pendingPoint = { x, y };
+    if (!mascotDragState.timer) {
+      mascotDragState.timer = setTimeout(() => {
+        if (!mascotDragState) return;
+        mascotDragState.timer = null;
+        flushMascotDragPreview();
+      }, 16);
+    }
   });
   ipcMain.on("mascot:dragEnd", (event) => {
     if (!mascotWindow || event.sender !== mascotWindow.webContents) return;
+    flushMascotDragPreview();
     mascotDragState = null;
     settings.mascotBounds = mascotWindow.getBounds();
     saveSettings();
@@ -2498,7 +2860,9 @@ function installIpcHandlers() {
     mascotResizeState = {
       startPoint: { x, y },
       startScale: normalizedScale(settings.mascotScale),
-      startBounds: mascotWindow.getBounds()
+      startBounds: mascotWindow.getBounds(),
+      pendingScale: normalizedScale(settings.mascotScale),
+      timer: null
     };
     setMascotMousePassthrough(false);
   });
@@ -2510,17 +2874,27 @@ function installIpcHandlers() {
     const dx = x - mascotResizeState.startPoint.x;
     const dy = y - mascotResizeState.startPoint.y;
     const delta = Math.max(dx, dy);
-    const nextScale = normalizedScale(mascotResizeState.startScale + delta / 360);
-    settings.mascotScale = nextScale;
-    resizeMascotWindowForScale(nextScale, false);
-    sendMascotState();
+    mascotResizeState.pendingScale = normalizedScale(mascotResizeState.startScale + delta / 360);
   });
   ipcMain.on("mascot:resizeEnd", (event) => {
     if (!mascotWindow || event.sender !== mascotWindow.webContents) return;
+    if (!mascotResizeState) return;
+    const startScale = normalizedScale(mascotResizeState?.startScale);
+    flushMascotResizePreview();
+    const finalScale = normalizedScale(settings.mascotScale);
     mascotResizeState = null;
     settings.mascotBounds = mascotWindow.getBounds();
     saveSettings();
     broadcastSettings();
+    if (Math.abs(finalScale - startScale) >= 0.01) {
+      appendActivity({
+        type: "mascot.resize",
+        title: "调整小力大小",
+        source: APP_NAME,
+        detail: `${Math.round(startScale * 100)}% -> ${Math.round(finalScale * 100)}%`,
+        meta: { scale: finalScale }
+      });
+    }
     updateMascotMousePassthroughFromCursor();
   });
 
@@ -2538,6 +2912,8 @@ function installIpcHandlers() {
   ipcMain.handle("ai:updateConfig", (_event, input) => updateAiConfig(input || {}));
   ipcMain.handle("ai:test", () => testAiConnection());
   ipcMain.handle("ai:summarize", (_event, input) => summarizeActivities(input || {}));
+  ipcMain.handle("arrange:preview", (_event, input = {}) => previewLanguageArrange(input || {}));
+  ipcMain.handle("arrange:commit", (_event, input = {}) => commitLanguageArrange(input || {}));
   ipcMain.handle("summaryTemplates:list", () => summaryTemplates());
   ipcMain.handle("summaryTemplates:save", (_event, input) => saveSummaryTemplate(input || {}));
   ipcMain.handle("summaryTemplates:delete", (_event, id) => deleteSummaryTemplate(id));
@@ -2570,7 +2946,8 @@ function installIpcHandlers() {
         dueAt: reminder.dueAt,
         startAt: reminder.startAt || reminder.dueAt,
         endAt: reminder.endAt || "",
-        repeat: reminder.repeat
+        repeat: reminder.repeat,
+        inputMode: String(input?.inputMode || "").slice(0, 40)
       }
     });
     return reminder;
@@ -2593,6 +2970,7 @@ function installIpcHandlers() {
         startAt: reminders[index].startAt || reminders[index].dueAt,
         endAt: reminders[index].endAt || "",
         repeat: reminders[index].repeat,
+        inputMode: String(input?.inputMode || "").slice(0, 40),
         enabled: reminders[index].enabled
       }
     });

@@ -7,10 +7,19 @@ const dueInput = document.querySelector("#dueInput");
 const endInput = document.querySelector("#endInput");
 const endTimeField = document.querySelector("#endTimeField");
 const repeatField = document.querySelector("#repeatField");
+const dueTimeLabel = document.querySelector("#dueTimeLabel");
 const reminderKindInputs = Array.from(document.querySelectorAll("input[name='reminderKind']"));
 const repeatInput = document.querySelector("#repeatInput");
 const sourceInput = document.querySelector("#sourceInput");
 const saveReminderBtn = document.querySelector("#saveReminderBtn");
+const timeBlockTimeline = document.querySelector("#timeBlockTimeline");
+const timelineScroll = document.querySelector("#timelineScroll");
+const timelineCanvas = document.querySelector("#timelineCanvas");
+const timelineHours = document.querySelector("#timelineHours");
+const timelineSelection = document.querySelector("#timelineSelection");
+const timelineDateLabel = document.querySelector("#timelineDateLabel");
+const timelineRangeLabel = document.querySelector("#timelineRangeLabel");
+const timelineSelectionText = document.querySelector("#timelineSelectionText");
 const pausedInput = document.querySelector("#pausedInput");
 const visibleInput = document.querySelector("#visibleInput");
 const pinnedBarInput = document.querySelector("#pinnedBarInput");
@@ -29,6 +38,13 @@ const filterHint = document.querySelector("#filterHint");
 const nextReminderPreview = document.querySelector("#nextReminderPreview");
 const pauseStatusText = document.querySelector("#pauseStatusText");
 const newReminderBtn = document.querySelector("#newReminderBtn");
+const directArrangeBtn = document.querySelector("#directArrangeBtn");
+const directArrangePanel = document.querySelector("#directArrangePanel");
+const closeArrangeBtn = document.querySelector("#closeArrangeBtn");
+const directArrangeInput = document.querySelector("#directArrangeInput");
+const previewArrangeBtn = document.querySelector("#previewArrangeBtn");
+const commitArrangeBtn = document.querySelector("#commitArrangeBtn");
+const arrangePreview = document.querySelector("#arrangePreview");
 const sourceList = document.querySelector("#sourceList");
 const focusMascotSettingsBtn = document.querySelector("#focusMascotSettingsBtn");
 const focusAiBtn = document.querySelector("#focusAiBtn");
@@ -84,6 +100,14 @@ let activeFilter = "today";
 let activeSource = "";
 let searchText = "";
 let selectedSummaryRange = "today";
+let timelineDrag = null;
+let timeBlockTimelineUsed = false;
+let currentArrangePlan = null;
+
+const TIMELINE_HOUR_HEIGHT = 36;
+const TIMELINE_DAY_MINUTES = 24 * 60;
+const TIMELINE_SNAP_MINUTES = 15;
+const TIMELINE_MIN_BLOCK_MINUTES = 15;
 
 const repeatLabels = {
   none: "不重复",
@@ -189,6 +213,29 @@ function formatTimeOnly(value) {
   }).format(date);
 }
 
+function formatArrangeDateTime(value) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "时间无效";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
+}
+
+function arrangeTypeLabel(type) {
+  if (type === "history") return "历史动作";
+  if (type === "timeBlock") return "时间块";
+  return "单点提醒";
+}
+
+function arrangeTimeLabel(action) {
+  if (action.type === "history") return `${formatArrangeDateTime(action.startAt)} - ${formatArrangeDateTime(action.endAt)}`;
+  if (action.type === "timeBlock") return `${formatArrangeDateTime(action.startAt)} - ${formatArrangeDateTime(action.endAt)}`;
+  return formatArrangeDateTime(action.dueAt || action.startAt);
+}
+
 function isTimeBlock(reminder) {
   return reminder?.kind === "timeBlock";
 }
@@ -237,6 +284,120 @@ function defaultEndDate(start = defaultDueDate()) {
   return new Date(start.getTime() + 60 * 60 * 1000);
 }
 
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function snapMinutes(minutes) {
+  return clamp(Math.round(minutes / TIMELINE_SNAP_MINUTES) * TIMELINE_SNAP_MINUTES, 0, TIMELINE_DAY_MINUTES);
+}
+
+function minutesOfDay(date) {
+  if (!Number.isFinite(date?.getTime?.())) return 0;
+  return date.getHours() * 60 + date.getMinutes();
+}
+
+function dateAtDayMinutes(baseDate, minutes) {
+  const date = startOfDay(baseDate);
+  date.setMinutes(minutes);
+  return date;
+}
+
+function timelineBaseDate() {
+  const start = new Date(dueInput.value || Date.now());
+  return Number.isFinite(start.getTime()) ? start : new Date();
+}
+
+function timelineSelectionMinutes() {
+  const start = new Date(dueInput.value);
+  const end = new Date(endInput.value);
+  const fallbackStart = Number.isFinite(start.getTime()) ? minutesOfDay(start) : 9 * 60;
+  let startMinutes = snapMinutes(fallbackStart);
+  const endIsNextMidnight = Number.isFinite(start.getTime())
+    && Number.isFinite(end.getTime())
+    && startOfDay(end).getTime() === startOfDay(start).getTime() + 24 * 60 * 60 * 1000
+    && minutesOfDay(end) === 0;
+  let endMinutes = Number.isFinite(end.getTime()) && (isSameDay(start, end) || endIsNextMidnight)
+    ? snapMinutes(minutesOfDay(end))
+    : startMinutes + 60;
+  if (endIsNextMidnight) endMinutes = TIMELINE_DAY_MINUTES;
+  if (endMinutes <= startMinutes) endMinutes = startMinutes + 60;
+  endMinutes = clamp(endMinutes, TIMELINE_MIN_BLOCK_MINUTES, TIMELINE_DAY_MINUTES);
+  startMinutes = clamp(startMinutes, 0, endMinutes - TIMELINE_MIN_BLOCK_MINUTES);
+  return { startMinutes, endMinutes };
+}
+
+function formatTimelineMinutes(minutes) {
+  const normalized = clamp(minutes, 0, TIMELINE_DAY_MINUTES);
+  const hours = Math.floor(normalized / 60);
+  const mins = normalized % 60;
+  if (hours >= 24) return "24:00";
+  return `${pad(hours)}:${pad(mins)}`;
+}
+
+function renderTimelineHours() {
+  timelineCanvas.style.setProperty("--timeline-hour-height", `${TIMELINE_HOUR_HEIGHT}px`);
+  timelineHours.innerHTML = Array.from({ length: 25 }, (_item, hour) => {
+    const top = Math.round(hour * TIMELINE_HOUR_HEIGHT);
+    const label = hour === 24 ? "24:00" : `${pad(hour)}:00`;
+    return `<div class="timeline-hour major" style="top:${top}px"><span>${label}</span></div>`;
+  }).join("");
+}
+
+function updateTimelineVisual(scrollToSelection = false) {
+  if (!timelineSelection) return;
+  const { startMinutes, endMinutes } = timelineSelectionMinutes();
+  const top = Math.round(startMinutes / 60 * TIMELINE_HOUR_HEIGHT);
+  const height = Math.max(10, Math.round((endMinutes - startMinutes) / 60 * TIMELINE_HOUR_HEIGHT));
+  const label = `${formatTimelineMinutes(startMinutes)}-${formatTimelineMinutes(endMinutes)}`;
+  timelineSelection.style.setProperty("--selection-top", `${top}px`);
+  timelineSelection.style.setProperty("--selection-height", `${height}px`);
+  timelineSelectionText.textContent = label;
+  timelineRangeLabel.textContent = label;
+  const base = timelineBaseDate();
+  timelineDateLabel.textContent = new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "short"
+  }).format(base);
+  timelineCanvas.setAttribute("aria-valuetext", label);
+  if (scrollToSelection) {
+    timelineScroll.scrollTop = clamp(top - 72, 0, timelineCanvas.scrollHeight);
+  }
+}
+
+function setTimelineInputsFromMinutes(startMinutes, endMinutes, scrollToSelection = false) {
+  const base = timelineBaseDate();
+  const start = dateAtDayMinutes(base, startMinutes);
+  const end = dateAtDayMinutes(base, endMinutes);
+  dueInput.value = localInputValue(start);
+  endInput.value = localInputValue(end);
+  updateTimelineVisual(scrollToSelection);
+}
+
+function minutesFromTimelineEvent(event) {
+  const rect = timelineCanvas.getBoundingClientRect();
+  const y = clamp(event.clientY - rect.top, 0, rect.height);
+  return snapMinutes(y / TIMELINE_HOUR_HEIGHT * 60);
+}
+
+function applyTimelineDrag(currentMinutes, finalize = false) {
+  if (!timelineDrag) return;
+  let startMinutes = Math.min(timelineDrag.anchorMinutes, currentMinutes);
+  let endMinutes = Math.max(timelineDrag.anchorMinutes, currentMinutes);
+  if (finalize && !timelineDrag.moved) {
+    startMinutes = timelineDrag.anchorMinutes;
+    endMinutes = startMinutes + 60;
+  }
+  if (endMinutes - startMinutes < TIMELINE_MIN_BLOCK_MINUTES) {
+    if (currentMinutes < timelineDrag.anchorMinutes) startMinutes = endMinutes - TIMELINE_MIN_BLOCK_MINUTES;
+    else endMinutes = startMinutes + TIMELINE_MIN_BLOCK_MINUTES;
+  }
+  startMinutes = clamp(startMinutes, 0, TIMELINE_DAY_MINUTES - TIMELINE_MIN_BLOCK_MINUTES);
+  endMinutes = clamp(endMinutes, startMinutes + TIMELINE_MIN_BLOCK_MINUTES, TIMELINE_DAY_MINUTES);
+  setTimelineInputsFromMinutes(startMinutes, endMinutes);
+}
+
 function reminderKind() {
   return reminderKindInputs.find((input) => input.checked)?.value === "timeBlock" ? "timeBlock" : "instant";
 }
@@ -247,11 +408,20 @@ function setReminderKind(kind) {
     input.checked = input.value === target;
   });
   const isTimeBlock = target === "timeBlock";
+  form.classList.toggle("is-time-block", isTimeBlock);
+  form.classList.toggle("is-instant-reminder", !isTimeBlock);
   endTimeField.hidden = !isTimeBlock;
+  timeBlockTimeline.hidden = !isTimeBlock;
+  dueTimeLabel.textContent = isTimeBlock ? "开始时间" : "提醒时间";
   repeatField.classList.toggle("repeat-field-compact", isTimeBlock);
   if (isTimeBlock && !endInput.value) {
     endInput.value = localInputValue(defaultEndDate(new Date(dueInput.value || defaultDueDate())));
   }
+  if (!isTimeBlock) {
+    endInput.value = "";
+    timeBlockTimelineUsed = false;
+  }
+  if (isTimeBlock) updateTimelineVisual(true);
 }
 
 function setInspectorMode(mode) {
@@ -274,11 +444,13 @@ function resetForm() {
   bodyInput.value = "";
   const start = defaultDueDate();
   dueInput.value = localInputValue(start);
-  endInput.value = localInputValue(defaultEndDate(start));
+  endInput.value = "";
   setReminderKind("instant");
   repeatInput.value = "none";
   sourceInput.value = "";
+  timeBlockTimelineUsed = false;
   setInspectorMode("reminder");
+  updateTimelineVisual(true);
   renderReminders(reminders);
   titleInput.focus();
 }
@@ -295,10 +467,12 @@ function fillForm(reminder) {
   dueInput.value = localInputValue(start);
   endInput.value = reminder.kind === "timeBlock" && reminder.endAt
     ? localInputValue(new Date(reminder.endAt))
-    : localInputValue(defaultEndDate(start));
+    : "";
   repeatInput.value = reminder.repeat;
   sourceInput.value = reminder.sourceLabel || "";
+  timeBlockTimelineUsed = false;
   setInspectorMode("reminder");
+  updateTimelineVisual(true);
   renderReminders(reminders);
   titleInput.focus();
 }
@@ -319,6 +493,7 @@ function reminderPayload() {
   };
   if (kind === "timeBlock") {
     payload.endAt = isoFromLocalInput(endInput.value);
+    if (timeBlockTimelineUsed) payload.inputMode = "timeline";
   }
   return payload;
 }
@@ -629,6 +804,38 @@ function renderReminders(nextReminders) {
   renderReminderRows(visibleReminders);
 }
 
+function resetArrangePreview() {
+  currentArrangePlan = null;
+  arrangePreview.hidden = true;
+  arrangePreview.innerHTML = "";
+  commitArrangeBtn.disabled = true;
+}
+
+function renderArrangePlan(plan) {
+  currentArrangePlan = plan;
+  const actions = Array.isArray(plan?.actions) ? plan.actions : [];
+  commitArrangeBtn.disabled = !actions.length;
+  arrangePreview.hidden = false;
+  if (!actions.length) {
+    arrangePreview.innerHTML = '<p class="arrange-empty">没有识别到可执行安排。</p>';
+    return;
+  }
+  arrangePreview.innerHTML = `
+    <div class="arrange-summary">${escapeHtml(plan.summary || "请确认安排。")}</div>
+    <div class="arrange-actions">
+      ${actions.map((action) => `
+        <article class="arrange-action ${escapeHtml(action.type)}">
+          <span class="pill ${action.type === "timeBlock" ? "block-kind" : action.type === "instant" ? "instant-kind" : "source"}">${escapeHtml(arrangeTypeLabel(action.type))}</span>
+          <strong>${escapeHtml(action.title)}</strong>
+          <time>${escapeHtml(arrangeTimeLabel(action))}</time>
+          ${action.body ? `<p>${escapeHtml(action.body)}</p>` : ""}
+          <small>${escapeHtml(action.sourceLabel || "直接安排")}</small>
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
 async function updateSetting(patch) {
   const next = await window.xiaoli.invoke("settings:update", patch);
   renderSettings(next);
@@ -667,9 +874,122 @@ dueInput.addEventListener("change", () => {
   if (!Number.isFinite(end.getTime()) || end.getTime() <= start.getTime()) {
     endInput.value = localInputValue(defaultEndDate(start));
   }
+  updateTimelineVisual(true);
 });
 
-newReminderBtn.addEventListener("click", resetForm);
+endInput.addEventListener("change", () => {
+  if (reminderKind() !== "timeBlock") return;
+  const start = new Date(dueInput.value);
+  const end = new Date(endInput.value);
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) return;
+  if (end.getTime() <= start.getTime()) {
+    endInput.value = localInputValue(defaultEndDate(start));
+  }
+  updateTimelineVisual(true);
+});
+
+timelineCanvas.addEventListener("pointerdown", (event) => {
+  if (reminderKind() !== "timeBlock" || event.button !== 0) return;
+  event.preventDefault();
+  const anchorMinutes = minutesFromTimelineEvent(event);
+  timelineDrag = {
+    pointerId: event.pointerId,
+    anchorMinutes,
+    moved: false
+  };
+  timelineCanvas.setPointerCapture(event.pointerId);
+  applyTimelineDrag(anchorMinutes);
+});
+
+timelineCanvas.addEventListener("pointermove", (event) => {
+  if (!timelineDrag || timelineDrag.pointerId !== event.pointerId) return;
+  event.preventDefault();
+  const currentMinutes = minutesFromTimelineEvent(event);
+  timelineDrag.moved = timelineDrag.moved || Math.abs(currentMinutes - timelineDrag.anchorMinutes) >= TIMELINE_SNAP_MINUTES;
+  applyTimelineDrag(currentMinutes);
+});
+
+function finishTimelineDrag(event) {
+  if (!timelineDrag || timelineDrag.pointerId !== event.pointerId) return;
+  event.preventDefault();
+  const currentMinutes = minutesFromTimelineEvent(event);
+  applyTimelineDrag(currentMinutes, true);
+  if (timelineCanvas.hasPointerCapture(event.pointerId)) {
+    timelineCanvas.releasePointerCapture(event.pointerId);
+  }
+  timelineDrag = null;
+  timeBlockTimelineUsed = true;
+}
+
+timelineCanvas.addEventListener("pointerup", finishTimelineDrag);
+timelineCanvas.addEventListener("pointercancel", finishTimelineDrag);
+
+directArrangeBtn.addEventListener("click", () => {
+  setInspectorMode("reminder");
+  directArrangePanel.hidden = false;
+  directArrangeInput.focus();
+});
+
+closeArrangeBtn.addEventListener("click", () => {
+  directArrangePanel.hidden = true;
+  resetArrangePreview();
+});
+
+previewArrangeBtn.addEventListener("click", async () => {
+  const text = directArrangeInput.value.trim();
+  if (!text) {
+    toast("请输入要直接安排的内容");
+    return;
+  }
+  try {
+    previewArrangeBtn.disabled = true;
+    commitArrangeBtn.disabled = true;
+    previewArrangeBtn.textContent = "生成中...";
+    arrangePreview.hidden = false;
+    arrangePreview.innerHTML = '<p class="arrange-empty">AI小力正在拆解安排...</p>';
+    const plan = await window.xiaoli.invoke("arrange:preview", { text });
+    renderArrangePlan(plan);
+    toast("请确认安排清单");
+  } catch (error) {
+    resetArrangePreview();
+    arrangePreview.hidden = false;
+    arrangePreview.innerHTML = `<p class="arrange-empty">${escapeHtml(error?.message || "直接安排失败")}</p>`;
+    toast(error?.message || "直接安排失败");
+  } finally {
+    previewArrangeBtn.disabled = false;
+    previewArrangeBtn.textContent = "生成安排";
+  }
+});
+
+commitArrangeBtn.addEventListener("click", async () => {
+  if (!currentArrangePlan) {
+    toast("请先生成安排");
+    return;
+  }
+  try {
+    commitArrangeBtn.disabled = true;
+    commitArrangeBtn.textContent = "应用中...";
+    const result = await window.xiaoli.invoke("arrange:commit", {
+      plan: currentArrangePlan,
+      originalText: directArrangeInput.value.trim()
+    });
+    renderReminders(await window.xiaoli.invoke("reminders:list"));
+    resetArrangePreview();
+    directArrangeInput.value = "";
+    toast(`已安排：历史 ${result.created?.historyCount || 0}，提醒 ${result.created?.reminderCount || 0}`);
+  } catch (error) {
+    toast(error?.message || "应用安排失败");
+  } finally {
+    commitArrangeBtn.textContent = "应用安排";
+    commitArrangeBtn.disabled = !currentArrangePlan;
+  }
+});
+
+newReminderBtn.addEventListener("click", () => {
+  resetForm();
+  directArrangePanel.hidden = true;
+  resetArrangePreview();
+});
 focusMascotSettingsBtn.addEventListener("click", () => setInspectorMode("mascot"));
 focusAiBtn.addEventListener("click", () => {
   setInspectorMode("ai");
@@ -1051,6 +1371,7 @@ window.xiaoli.on("settings:focusJustNow", async (payload = {}) => {
 
 async function init() {
   setInspectorMode("reminder");
+  renderTimelineHours();
   summaryStartInput.value = localDateValue();
   summaryEndInput.value = localDateValue();
   resetForm();

@@ -15,6 +15,8 @@ const invokeChannels = new Set([
   "ai:updateConfig",
   "ai:test",
   "ai:summarize",
+  "arrange:preview",
+  "arrange:commit",
   "summaryTemplates:list",
   "summaryTemplates:save",
   "summaryTemplates:delete",
