@@ -1,6 +1,6 @@
 {
   "name": "ai-xiaoli",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "AI小力，桌面 AI 任务助手。",
   "main": "main.js",
   "type": "commonjs",

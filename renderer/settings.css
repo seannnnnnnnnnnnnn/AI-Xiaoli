@@ -1043,6 +1043,48 @@ label {
   accent-color: var(--orange);
 }
 
+.update-card {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 14px;
+}
+
+.update-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.update-copy strong {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 900;
+  line-height: 1.25;
+}
+
+.update-copy small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.45;
+}
+
+.update-toggle {
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #fbfbfd;
+}
+
+.update-actions .primary-button {
+  color: #fff;
+  background: var(--blue);
+}
+
+.update-actions .primary-button:hover {
+  background: #0067d8;
+}
+
 .button-row {
   display: flex;
   flex-wrap: wrap;

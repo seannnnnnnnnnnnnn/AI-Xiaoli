@@ -15,6 +15,11 @@ const invokeChannels = new Set([
   "ai:updateConfig",
   "ai:test",
   "ai:summarize",
+  "updates:get",
+  "updates:check",
+  "updates:openRelease",
+  "updates:openDownload",
+  "updates:ignore",
   "arrange:preview",
   "arrange:commit",
   "summaryTemplates:list",
@@ -36,8 +41,10 @@ const eventChannels = new Set([
   "settings:focusCreate",
   "settings:focusAi",
   "settings:focusJustNow",
+  "updates:changed",
   "reminders:changed",
   "mascot:remind",
+  "mascot:status",
   "mascot:state",
   "mascot:timeBlock"
 ]);

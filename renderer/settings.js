@@ -26,6 +26,13 @@ const pinnedBarInput = document.querySelector("#pinnedBarInput");
 const mascotScaleInput = document.querySelector("#mascotScaleInput");
 const mascotScaleValue = document.querySelector("#mascotScaleValue");
 const autoLaunchInput = document.querySelector("#autoLaunchInput");
+const updateAutoCheckInput = document.querySelector("#updateAutoCheckInput");
+const updateTitle = document.querySelector("#updateTitle");
+const updateDetail = document.querySelector("#updateDetail");
+const checkUpdateBtn = document.querySelector("#checkUpdateBtn");
+const downloadUpdateBtn = document.querySelector("#downloadUpdateBtn");
+const viewReleaseBtn = document.querySelector("#viewReleaseBtn");
+const ignoreUpdateBtn = document.querySelector("#ignoreUpdateBtn");
 const testAnimationBtn = document.querySelector("#testAnimationBtn");
 const reminderList = document.querySelector("#reminderList");
 const reminderCount = document.querySelector("#reminderCount");
@@ -89,6 +96,7 @@ const justNowOutput = document.querySelector("#justNowOutput");
 let reminders = [];
 let settings = {};
 let aiConfig = {};
+let updateState = {};
 let summaryTemplates = [];
 let summaryHistory = [];
 let justNowHistory = [];
@@ -216,6 +224,25 @@ function formatTimeOnly(value) {
 function formatArrangeDateTime(value) {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return "时间无效";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
+}
+
+function formatFileSize(bytes) {
+  const size = Number(bytes);
+  if (!Number.isFinite(size) || size <= 0) return "";
+  if (size >= 1024 * 1024) return `${Math.round(size / 1024 / 1024)} MB`;
+  if (size >= 1024) return `${Math.round(size / 1024)} KB`;
+  return `${Math.round(size)} B`;
+}
+
+function formatUpdateCheckedAt(value) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "尚未检查";
   return new Intl.DateTimeFormat("zh-CN", {
     month: "2-digit",
     day: "2-digit",
@@ -507,7 +534,53 @@ function renderSettings(nextSettings) {
   mascotScaleInput.value = String(Math.round(scale * 100));
   mascotScaleValue.textContent = `${Math.round(scale * 100)}%`;
   autoLaunchInput.checked = Boolean(settings.autoLaunch);
+  updateAutoCheckInput.checked = settings.updates?.autoCheck !== false;
   pauseStatusText.textContent = settings.paused ? "已暂停" : "运行中";
+}
+
+function renderUpdateState(nextState = {}) {
+  updateState = { ...updateState, ...(nextState || {}) };
+  const currentVersion = updateState.currentVersion || "未知";
+  const latestVersion = updateState.latestVersion || "";
+  const checkedAt = formatUpdateCheckedAt(updateState.lastCheckedAt);
+  const assetInfo = [updateState.assetName, formatFileSize(updateState.assetSize)].filter(Boolean).join(" · ");
+  checkUpdateBtn.disabled = Boolean(updateState.checking);
+  downloadUpdateBtn.hidden = !updateState.hasUpdate || updateState.ignored || !updateState.downloadUrl;
+  viewReleaseBtn.hidden = !updateState.hasUpdate || !updateState.releaseUrl;
+  ignoreUpdateBtn.hidden = !updateState.hasUpdate || updateState.ignored;
+
+  if (updateState.checking) {
+    updateTitle.textContent = "正在检查更新";
+    updateDetail.textContent = `当前版本 ${currentVersion}。`;
+    checkUpdateBtn.textContent = "检查中...";
+    downloadUpdateBtn.hidden = true;
+    viewReleaseBtn.hidden = true;
+    ignoreUpdateBtn.hidden = true;
+    return;
+  }
+
+  checkUpdateBtn.textContent = "检查更新";
+  if (updateState.status === "disabled") {
+    updateTitle.textContent = `当前版本 ${currentVersion}`;
+    updateDetail.textContent = "自动检查已关闭，可手动检查新版。";
+    return;
+  }
+  if (updateState.status === "error") {
+    updateTitle.textContent = "检查更新失败";
+    updateDetail.textContent = updateState.error || "请稍后重试。";
+    return;
+  }
+  if (updateState.hasUpdate) {
+    updateTitle.textContent = updateState.ignored
+      ? `已忽略 ${latestVersion}`
+      : `发现新版本 ${latestVersion}`;
+    updateDetail.textContent = updateState.ignored
+      ? `当前版本 ${currentVersion}。下次发布新版本后会继续提醒。`
+      : `${assetInfo || "未找到当前平台附件"}。上次检查：${checkedAt}`;
+    return;
+  }
+  updateTitle.textContent = `当前已是最新版本 ${currentVersion}`;
+  updateDetail.textContent = `上次检查：${checkedAt}`;
 }
 
 function renderAiConfig(nextConfig = {}) {
@@ -1076,6 +1149,52 @@ autoLaunchInput.addEventListener("change", () => {
   updateSetting({ autoLaunch: autoLaunchInput.checked }).catch((error) => toast(error?.message || "设置失败"));
 });
 
+updateAutoCheckInput.addEventListener("change", () => {
+  updateSetting({ updates: { autoCheck: updateAutoCheckInput.checked } })
+    .catch((error) => toast(error?.message || "设置失败"));
+});
+
+checkUpdateBtn.addEventListener("click", async () => {
+  try {
+    renderUpdateState({ checking: true, status: "checking", error: "" });
+    const result = await window.xiaoli.invoke("updates:check");
+    renderUpdateState(result);
+    if (result?.hasUpdate && !result?.ignored) toast(`发现新版本 ${result.latestVersion}`);
+    else if (result?.ignored) toast(`已忽略 ${result.latestVersion}`);
+    else toast("当前已是最新版本");
+  } catch (error) {
+    renderUpdateState({ checking: false, status: "error", error: error?.message || "检查更新失败" });
+    toast(error?.message || "检查更新失败");
+  }
+});
+
+downloadUpdateBtn.addEventListener("click", async () => {
+  try {
+    await window.xiaoli.invoke("updates:openDownload");
+    toast("已打开新版下载链接");
+  } catch (error) {
+    toast(error?.message || "无法打开下载链接");
+  }
+});
+
+viewReleaseBtn.addEventListener("click", async () => {
+  try {
+    await window.xiaoli.invoke("updates:openRelease");
+    toast("已打开更新说明");
+  } catch (error) {
+    toast(error?.message || "无法打开更新说明");
+  }
+});
+
+ignoreUpdateBtn.addEventListener("click", async () => {
+  try {
+    renderUpdateState(await window.xiaoli.invoke("updates:ignore"));
+    toast("已忽略这个版本");
+  } catch (error) {
+    toast(error?.message || "无法忽略版本");
+  }
+});
+
 aiConfigForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
@@ -1352,6 +1471,7 @@ testAnimationBtn.addEventListener("click", async () => {
 });
 
 window.xiaoli.on("settings:changed", renderSettings);
+window.xiaoli.on("updates:changed", renderUpdateState);
 window.xiaoli.on("reminders:changed", renderReminders);
 window.xiaoli.on("settings:focusCreate", () => {
   resetForm();
@@ -1376,6 +1496,7 @@ async function init() {
   summaryEndInput.value = localDateValue();
   resetForm();
   renderSettings(await window.xiaoli.invoke("settings:get"));
+  renderUpdateState(await window.xiaoli.invoke("updates:get"));
   renderAiConfig(await window.xiaoli.invoke("ai:getConfig"));
   renderSummaryTemplates(await window.xiaoli.invoke("summaryTemplates:list"));
   const justNowTemplate = await window.xiaoli.invoke("justNowTemplate:get");

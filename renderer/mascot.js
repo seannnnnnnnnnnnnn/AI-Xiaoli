@@ -787,6 +787,14 @@ window.addEventListener("mouseup", (event) => {
 window.xiaoli.on("settings:changed", applySettings);
 window.xiaoli.on("mascot:state", applySettings);
 window.xiaoli.on("mascot:remind", showBubble);
+window.xiaoli.on("mascot:status", (payload = {}) => {
+  renderStatusBubble(
+    payload.source || "AI小力",
+    payload.title || "状态更新",
+    payload.body || "",
+    Number(payload.autoHideMs || 0)
+  );
+});
 window.xiaoli.on("mascot:timeBlock", applyTimeBlockState);
 
 createStars();

@@ -1,6 +1,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const https = require("node:https");
 const { execFile, spawn } = require("node:child_process");
 const {
   app,
@@ -12,7 +13,8 @@ const {
   nativeImage,
   session,
   screen,
-  safeStorage
+  safeStorage,
+  shell
 } = require("electron");
 
 const APP_NAME = "AI小力";
@@ -31,6 +33,11 @@ const SETTINGS_SIZE = { width: 1160, height: 820 };
 const SUMMARY_HISTORY_LIMIT = 60;
 const TRAY_IDLE_TITLE = "小力";
 const TRAY_TASK_TITLE_MAX_LENGTH = 36;
+const UPDATE_REPO = "seannnnnnnnnnnnnn/AI-Xiaoli";
+const UPDATE_API_URL = `https://api.github.com/repos/${UPDATE_REPO}/releases/latest`;
+const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const UPDATE_STARTUP_DELAY_MS = 9000;
+const UPDATE_REQUEST_TIMEOUT_MS = 15000;
 const VALID_REPEATS = new Set(["none", "daily", "weekly", "monthly"]);
 const VALID_REMINDER_KINDS = new Set(["instant", "timeBlock"]);
 const VALID_ARRANGE_ACTIONS = new Set(["history", "instant", "timeBlock"]);
@@ -74,11 +81,13 @@ let mascotResizeState = null;
 let mascotBubbleInteractive = false;
 let mascotControlsExpanded = false;
 let activityTimer = null;
+let updateTimer = null;
 let currentForeground = null;
 let lastForegroundErrorAt = 0;
 let lastActivityTrimAt = 0;
 let activeReminderPayload = null;
 let nativeJustNowSession = null;
+let updateState = null;
 
 const defaultSettings = {
   paused: false,
@@ -94,6 +103,12 @@ const defaultSettings = {
     activityTracking: false,
     retentionDays: 30,
     updatedAt: ""
+  },
+  updates: {
+    autoCheck: true,
+    ignoredVersion: "",
+    lastCheckAt: "",
+    lastNotifiedVersion: ""
   },
   mascotBounds: null,
   updatedAt: ""
@@ -973,6 +988,7 @@ function loadState() {
     ...readJson("settings.json", {})
   };
   settings.ai = normalizeAiSettings(settings.ai);
+  settings.updates = normalizeUpdateSettings(settings.updates);
   reminders = Array.isArray(storedReminders)
     ? storedReminders.map(normalizeStoredReminder).filter(Boolean)
     : [];
@@ -983,6 +999,7 @@ function loadState() {
   }
   settings.mascotScale = normalizedScale(settings.mascotScale);
   settings.notificationBarPinned = Boolean(settings.notificationBarPinned);
+  updateState = initialUpdateState();
 }
 
 function normalizeAiSettings(value = {}) {
@@ -997,6 +1014,314 @@ function normalizeAiSettings(value = {}) {
     model: String(value?.model || defaultSettings.ai.model).trim() || defaultSettings.ai.model,
     updatedAt: value?.updatedAt || ""
   };
+}
+
+function normalizeUpdateSettings(value = {}) {
+  const input = value && typeof value === "object" ? value : {};
+  return {
+    ...defaultSettings.updates,
+    ...input,
+    autoCheck: input.autoCheck !== false,
+    ignoredVersion: String(input.ignoredVersion || "").trim(),
+    lastCheckAt: String(input.lastCheckAt || "").trim(),
+    lastNotifiedVersion: String(input.lastNotifiedVersion || "").trim()
+  };
+}
+
+function currentAppVersion() {
+  return String(app.getVersion() || "0.0.0").trim();
+}
+
+function initialUpdateState() {
+  return {
+    checking: false,
+    status: "idle",
+    currentVersion: currentAppVersion(),
+    latestVersion: "",
+    hasUpdate: false,
+    ignored: false,
+    releaseName: "",
+    releaseUrl: "",
+    releaseNotes: "",
+    assetName: "",
+    assetSize: 0,
+    downloadUrl: "",
+    lastCheckedAt: settings.updates?.lastCheckAt || "",
+    error: ""
+  };
+}
+
+function normalizeVersionTag(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^v/i, "")
+    .split(/[+-]/)[0];
+}
+
+function compareVersions(left, right) {
+  const leftParts = normalizeVersionTag(left).split(".").map((part) => Number.parseInt(part, 10) || 0);
+  const rightParts = normalizeVersionTag(right).split(".").map((part) => Number.parseInt(part, 10) || 0);
+  const length = Math.max(leftParts.length, rightParts.length, 3);
+  for (let index = 0; index < length; index += 1) {
+    const diff = (leftParts[index] || 0) - (rightParts[index] || 0);
+    if (diff !== 0) return diff > 0 ? 1 : -1;
+  }
+  return 0;
+}
+
+function publicUpdateState() {
+  if (!updateState) updateState = initialUpdateState();
+  return {
+    ...updateState,
+    currentVersion: currentAppVersion(),
+    autoCheck: settings.updates?.autoCheck !== false
+  };
+}
+
+function broadcastUpdateState() {
+  broadcast("updates:changed", publicUpdateState());
+  updateTrayMenu();
+  updateApplicationMenu();
+}
+
+function requestJson(url, redirectCount = 0) {
+  return new Promise((resolve, reject) => {
+    const request = https.get(url, {
+      headers: {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": `${APP_NAME}/${currentAppVersion()}`
+      },
+      timeout: UPDATE_REQUEST_TIMEOUT_MS
+    }, (response) => {
+      const location = response.headers.location;
+      if (response.statusCode >= 300 && response.statusCode < 400 && location && redirectCount < 3) {
+        response.resume();
+        requestJson(location, redirectCount + 1).then(resolve, reject);
+        return;
+      }
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => {
+        body += chunk;
+        if (body.length > 2 * 1024 * 1024) {
+          request.destroy(new Error("更新信息过大。"));
+        }
+      });
+      response.on("end", () => {
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          reject(new Error(`检查更新失败：HTTP ${response.statusCode}`));
+          return;
+        }
+        try {
+          resolve(JSON.parse(body));
+        } catch {
+          reject(new Error("更新信息解析失败。"));
+        }
+      });
+    });
+    request.on("timeout", () => request.destroy(new Error("检查更新超时。")));
+    request.on("error", reject);
+  });
+}
+
+function platformUpdatePatterns() {
+  if (process.platform === "darwin") {
+    return process.arch === "arm64"
+      ? [/macos.*arm64.*\.zip$/i, /darwin.*arm64.*\.zip$/i, /mac.*arm64.*\.zip$/i]
+      : [/macos.*x64.*\.zip$/i, /darwin.*x64.*\.zip$/i, /mac.*x64.*\.zip$/i, /mac.*\.zip$/i];
+  }
+  if (process.platform === "win32") {
+    return process.arch === "arm64"
+      ? [/windows.*arm64.*\.(zip|exe)$/i, /win.*arm64.*\.(zip|exe)$/i]
+      : [/windows.*x64.*\.(zip|exe)$/i, /win.*x64.*\.(zip|exe)$/i, /windows.*\.(zip|exe)$/i];
+  }
+  return [new RegExp(`${process.platform}.*${process.arch}.*\\.(zip|appimage|deb|rpm)$`, "i")];
+}
+
+function selectUpdateAsset(release = {}) {
+  const assets = Array.isArray(release.assets) ? release.assets : [];
+  const patterns = platformUpdatePatterns();
+  for (const pattern of patterns) {
+    const match = assets.find((asset) => pattern.test(String(asset.name || "")));
+    if (match?.browser_download_url) {
+      return {
+        name: String(match.name || ""),
+        url: String(match.browser_download_url || ""),
+        size: Number(match.size || 0)
+      };
+    }
+  }
+  return null;
+}
+
+function setUpdateState(nextState = {}) {
+  updateState = {
+    ...initialUpdateState(),
+    ...(updateState || {}),
+    ...nextState,
+    currentVersion: currentAppVersion()
+  };
+  broadcastUpdateState();
+  return publicUpdateState();
+}
+
+function shouldCheckUpdatesNow() {
+  if (settings.updates?.autoCheck === false) return false;
+  const lastMs = new Date(settings.updates?.lastCheckAt || "").getTime();
+  return !Number.isFinite(lastMs) || Date.now() - lastMs >= UPDATE_CHECK_INTERVAL_MS;
+}
+
+async function checkForUpdates({ manual = false } = {}) {
+  if (updateState?.checking) return publicUpdateState();
+  setUpdateState({ checking: true, status: "checking", error: "" });
+  try {
+    const release = await requestJson(UPDATE_API_URL);
+    const latestVersion = String(release.tag_name || "").trim();
+    if (!latestVersion) throw new Error("最新版本号为空。");
+    const asset = selectUpdateAsset(release);
+    const hasUpdate = compareVersions(latestVersion, currentAppVersion()) > 0;
+    const ignored = hasUpdate && settings.updates?.ignoredVersion === latestVersion;
+    const checkedAt = new Date().toISOString();
+
+    settings.updates = normalizeUpdateSettings({
+      ...settings.updates,
+      lastCheckAt: checkedAt
+    });
+    saveSettings();
+
+    const state = setUpdateState({
+      checking: false,
+      status: hasUpdate ? (asset ? "available" : "available-no-asset") : "current",
+      latestVersion,
+      hasUpdate,
+      ignored,
+      releaseName: String(release.name || latestVersion),
+      releaseUrl: String(release.html_url || `https://github.com/${UPDATE_REPO}/releases/latest`),
+      releaseNotes: String(release.body || "").slice(0, 4000),
+      assetName: asset?.name || "",
+      assetSize: asset?.size || 0,
+      downloadUrl: asset?.url || "",
+      lastCheckedAt: checkedAt,
+      error: ""
+    });
+
+    if (hasUpdate && !ignored && !manual) {
+      notifyUpdateAvailable(state, { manual });
+    }
+    return state;
+  } catch (error) {
+    const state = setUpdateState({
+      checking: false,
+      status: "error",
+      hasUpdate: false,
+      ignored: false,
+      lastCheckedAt: settings.updates?.lastCheckAt || "",
+      error: error?.message || "检查更新失败。"
+    });
+    if (manual) throw error;
+    return state;
+  }
+}
+
+function notifyUpdateAvailable(state = publicUpdateState(), { manual = false } = {}) {
+  if (!state.hasUpdate || state.ignored) return;
+  if (!manual && settings.updates?.lastNotifiedVersion === state.latestVersion) return;
+  settings.updates = normalizeUpdateSettings({
+    ...settings.updates,
+    lastNotifiedVersion: state.latestVersion
+  });
+  saveSettings();
+  updateTrayMenu();
+  updateApplicationMenu();
+
+  appendActivity({
+    type: "app.update.available",
+    title: `发现新版本 ${state.latestVersion}`,
+    source: APP_NAME,
+    detail: state.releaseName || state.assetName || "",
+    meta: {
+      version: state.latestVersion,
+      assetName: state.assetName,
+      releaseUrl: state.releaseUrl
+    }
+  });
+
+  if (mascotWindow && !mascotWindow.isDestroyed()) {
+    mascotWindow.webContents.send("mascot:status", {
+      source: "软件更新",
+      title: `发现 ${state.latestVersion}`,
+      body: state.downloadUrl ? "可在设置页一键下载。" : "可在设置页查看更新。",
+      autoHideMs: 6500
+    });
+  }
+
+  if (Notification.isSupported()) {
+    const notification = new Notification({
+      title: `AI小力有新版本 ${state.latestVersion}`,
+      body: state.assetName ? "点击查看并下载新版。" : "点击查看更新说明。",
+      silent: true
+    });
+    notification.on("click", () => createSettingsWindow());
+    notification.show();
+  }
+}
+
+function openUpdateRelease() {
+  const state = publicUpdateState();
+  const target = state.releaseUrl || `https://github.com/${UPDATE_REPO}/releases/latest`;
+  shell.openExternal(target);
+  return true;
+}
+
+function openUpdateDownload() {
+  const state = publicUpdateState();
+  const target = state.downloadUrl || state.releaseUrl || `https://github.com/${UPDATE_REPO}/releases/latest`;
+  shell.openExternal(target);
+  appendActivity({
+    type: "app.update.download",
+    title: state.latestVersion ? `下载新版本 ${state.latestVersion}` : "打开更新下载",
+    source: APP_NAME,
+    detail: state.assetName || target,
+    meta: {
+      version: state.latestVersion,
+      assetName: state.assetName,
+      releaseUrl: state.releaseUrl
+    }
+  });
+  return true;
+}
+
+function ignoreCurrentUpdate() {
+  const state = publicUpdateState();
+  if (!state.latestVersion || !state.hasUpdate) throw new Error("当前没有可忽略的新版本。");
+  settings.updates = normalizeUpdateSettings({
+    ...settings.updates,
+    ignoredVersion: state.latestVersion
+  });
+  saveSettings();
+  setUpdateState({ ignored: true });
+  appendActivity({
+    type: "app.update.ignore",
+    title: `忽略版本 ${state.latestVersion}`,
+    source: APP_NAME,
+    detail: state.releaseName || ""
+  });
+  return publicUpdateState();
+}
+
+function startUpdateLoop() {
+  clearInterval(updateTimer);
+  updateTimer = null;
+  if (settings.updates?.autoCheck === false) {
+    setUpdateState({ status: "disabled" });
+    return;
+  }
+  updateTimer = setInterval(() => {
+    if (shouldCheckUpdatesNow()) checkForUpdates().catch(() => {});
+  }, UPDATE_CHECK_INTERVAL_MS);
+  if (shouldCheckUpdatesNow()) {
+    setTimeout(() => checkForUpdates().catch(() => {}), UPDATE_STARTUP_DELAY_MS);
+  }
 }
 
 function normalizedRetentionDays(value) {
@@ -1815,6 +2140,10 @@ function updateApplicationMenu() {
   const visible = Boolean(settings.mascotVisible);
   const paused = Boolean(settings.paused);
   const pinned = Boolean(settings.notificationBarPinned);
+  const updateInfo = publicUpdateState();
+  const updateLabel = updateInfo.hasUpdate && !updateInfo.ignored
+    ? `下载更新 ${updateInfo.latestVersion}`
+    : "检查更新";
   const template = [
     {
       label: APP_NAME,
@@ -1835,6 +2164,17 @@ function updateApplicationMenu() {
         { label: "查看提醒", click: createSettingsWindow },
         { label: "AI 总结", click: showSettingsAndFocusAi },
         { label: "刚刚发生了啥", click: () => showSettingsAndFocusJustNow() },
+        {
+          label: updateLabel,
+          click: () => {
+            if (updateInfo.hasUpdate && !updateInfo.ignored) openUpdateDownload();
+            else checkForUpdates({ manual: true }).catch((error) => {
+              if (Notification.isSupported()) {
+                new Notification({ title: "AI小力检查更新失败", body: error?.message || "请稍后重试。" }).show();
+              }
+            });
+          }
+        },
         { type: "separator" },
         {
           label: "显示小力",
@@ -1875,11 +2215,29 @@ function updateTrayMenu() {
   const paused = Boolean(settings.paused);
   const pinned = Boolean(settings.notificationBarPinned);
   const autoLaunch = publicSettings().autoLaunch;
+  const updateInfo = publicUpdateState();
+  const updateItems = updateInfo.hasUpdate && !updateInfo.ignored
+    ? [
+        { label: `下载更新 ${updateInfo.latestVersion}`, click: openUpdateDownload },
+        { label: "查看更新说明", click: openUpdateRelease }
+      ]
+    : [
+        {
+          label: updateInfo.checking ? "正在检查更新..." : "检查更新",
+          enabled: !updateInfo.checking,
+          click: () => checkForUpdates({ manual: true }).catch((error) => {
+            if (Notification.isSupported()) {
+              new Notification({ title: "AI小力检查更新失败", body: error?.message || "请稍后重试。" }).show();
+            }
+          })
+        }
+      ];
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: "添加提醒", click: showSettingsAndFocusForm },
     { label: "查看提醒", click: createSettingsWindow },
     { label: "AI 总结", click: showSettingsAndFocusAi },
     { label: "刚刚发生了啥", click: () => showSettingsAndFocusJustNow() },
+    ...updateItems,
     { type: "separator" },
     {
       label: paused ? "恢复提醒" : "暂停提醒",
@@ -1925,6 +2283,16 @@ function updateSettings(patch = {}) {
   if (Object.prototype.hasOwnProperty.call(patch, "notificationBarPinned")) {
     settings.notificationBarPinned = Boolean(patch.notificationBarPinned);
   }
+  if (patch.updates && typeof patch.updates === "object") {
+    const wasAutoCheck = settings.updates?.autoCheck !== false;
+    settings.updates = normalizeUpdateSettings({
+      ...settings.updates,
+      ...patch.updates
+    });
+    if (wasAutoCheck !== (settings.updates.autoCheck !== false)) {
+      setTimeout(startUpdateLoop, 0);
+    }
+  }
   if (Object.prototype.hasOwnProperty.call(patch, "mascotScale")) {
     const nextScale = normalizedScale(patch.mascotScale);
     if (nextScale !== settings.mascotScale) {
@@ -1944,6 +2312,7 @@ function updateSettings(patch = {}) {
   }
   saveSettings();
   broadcastSettings();
+  broadcastUpdateState();
   return publicSettings();
 }
 
@@ -2912,6 +3281,11 @@ function installIpcHandlers() {
   ipcMain.handle("ai:updateConfig", (_event, input) => updateAiConfig(input || {}));
   ipcMain.handle("ai:test", () => testAiConnection());
   ipcMain.handle("ai:summarize", (_event, input) => summarizeActivities(input || {}));
+  ipcMain.handle("updates:get", () => publicUpdateState());
+  ipcMain.handle("updates:check", () => checkForUpdates({ manual: true }));
+  ipcMain.handle("updates:openRelease", () => openUpdateRelease());
+  ipcMain.handle("updates:openDownload", () => openUpdateDownload());
+  ipcMain.handle("updates:ignore", () => ignoreCurrentUpdate());
   ipcMain.handle("arrange:preview", (_event, input = {}) => previewLanguageArrange(input || {}));
   ipcMain.handle("arrange:commit", (_event, input = {}) => commitLanguageArrange(input || {}));
   ipcMain.handle("summaryTemplates:list", () => summaryTemplates());
@@ -3026,6 +3400,7 @@ app.on("window-all-closed", () => {});
 
 app.on("before-quit", () => {
   clearInterval(reminderTimer);
+  clearInterval(updateTimer);
   clearTimeout(saveBoundsTimer);
   stopMascotMousePoll();
   stopActivityTracking();
@@ -3049,4 +3424,5 @@ app.whenReady().then(() => {
   updateApplicationMenu();
   startActivityTracking();
   startReminderLoop();
+  startUpdateLoop();
 });

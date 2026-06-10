@@ -230,6 +230,27 @@
             <input id="autoLaunchInput" type="checkbox" />
           </label>
 
+          <div class="update-card">
+            <div class="update-copy">
+              <p class="eyebrow">软件更新</p>
+              <strong id="updateTitle">当前版本</strong>
+              <small id="updateDetail">检查 GitHub Release，发现新版后由你决定是否下载。</small>
+            </div>
+            <label class="switch-row compact update-toggle">
+              <span>
+                <strong>自动检查更新</strong>
+                <small>启动后最多每天检查一次，不会自动安装。</small>
+              </span>
+              <input id="updateAutoCheckInput" type="checkbox" />
+            </label>
+            <div class="button-row update-actions">
+              <button id="checkUpdateBtn" class="ghost-button" type="button">检查更新</button>
+              <button id="downloadUpdateBtn" class="primary-button" type="button" hidden>下载新版</button>
+              <button id="viewReleaseBtn" class="ghost-button" type="button" hidden>更新说明</button>
+              <button id="ignoreUpdateBtn" class="ghost-button" type="button" hidden>忽略此版本</button>
+            </div>
+          </div>
+
           <div class="settings-divider"></div>
 
           <div class="panel-head compact-head">
